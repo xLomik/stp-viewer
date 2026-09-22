@@ -1,4 +1,4 @@
-LIBRARY StepThumbnailProvider
+LIBRARY StepShellExt
 EXPORTS
     DllGetClassObject   PRIVATE
     DllCanUnloadNow     PRIVATE
