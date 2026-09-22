@@ -36,8 +36,9 @@ struct RenderStyle {
     std::uint32_t edgeColor = 0xFF20282F;
     bool drawEdges = true;
     bool drawFaces = true;
-    double edgeWidth = 1.1;  // output pixels
+    double edgeWidth = 1.1;  // pixeles de salida
     int supersample = 2;     // 1..4
+    int threads = 0;         // 0 = tantos como nucleos (maximo 8)
 };
 
 struct Framebuffer {

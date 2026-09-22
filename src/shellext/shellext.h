@@ -20,4 +20,7 @@ HRESULT RegisterShellExtensions(HMODULE module, bool perUser);
 HRESULT UnregisterShellExtensions(bool perUser);
 
 // Dibuja un archivo STEP en memoria como mapa de bits ARGB premultiplicado.
-HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP* out);
+#include <string>
+
+HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP* out,
+                            const std::string& extension);

@@ -5,8 +5,9 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <cctype>
 
-#include "../engine/step_model.h"
+#include "../formats/formats.h"
 #include "../render/renderer.h"
 
 namespace {
@@ -80,11 +81,35 @@ int main(int argc, char** argv) {
         else if (std::strncmp(argv[i], "--view=", 7) == 0) view = argv[i] + 7;
     }
 
+    std::FILE* file = std::fopen(input.c_str(), "rb");
+    if (!file) {
+        std::printf("error: no se pudo abrir %s\n", input.c_str());
+        return 1;
+    }
+    std::fseek(file, 0, SEEK_END);
+    const long fileSize = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+    std::string bytes(static_cast<std::size_t>(std::max(0L, fileSize)), '\0');
+    const std::size_t got = std::fread(&bytes[0], 1, bytes.size(), file);
+    std::fclose(file);
+    bytes.resize(got);
+
+    std::string extension;
+    const std::size_t dot = input.find_last_of('.');
+    if (dot != std::string::npos) {
+        extension = input.substr(dot);
+        for (char& c : extension) c = static_cast<char>(std::tolower(c));
+    }
+
     stp::Mesh mesh;
     stp::LoadStats stats;
     std::string error;
-    if (!stp::loadStepFile(input, &mesh, &error, &stats, 0.0012)) {
+    if (!stp::loadModel(bytes.data(), bytes.size(), extension, &mesh, &error, &stats, 0.0012)) {
         std::printf("error: %s\n", error.c_str());
+        std::vector<std::uint8_t> preview;
+        if (stp::extractEmbeddedPreview(bytes.data(), bytes.size(), &preview)) {
+            std::printf("lleva una vista previa incrustada de %zu bytes\n", preview.size());
+        }
         return 1;
     }
 

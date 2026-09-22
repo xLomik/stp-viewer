@@ -1,13 +1,30 @@
 # stp-viewer
 
-Vista previa de archivos **STEP** (`.stp`, `.step`) en Windows: miniaturas dentro
-del Explorador —como hace *DXF Thumbnails* con los DXF—, **panel de vista previa
+Vista previa de archivos 3D y planos CAD en Windows: miniaturas dentro del
+Explorador —como hace *DXF Thumbnails* con los DXF—, **panel de vista previa
 interactivo** y un visor 3D independiente.
 
 | Programa | Que hace |
 |---|---|
-| `StepShellExt.dll` | Dos extensiones de shell en una DLL: `IThumbnailProvider` dibuja la miniatura de cada `.stp` / `.step` en la carpeta, e `IPreviewHandler` pone la pieza en el panel de vista previa, donde se puede girar, acercar y mover sin abrir nada. |
+| `StepShellExt.dll` | Dos extensiones de shell en una DLL: `IThumbnailProvider` dibuja la miniatura de cada archivo en la carpeta, e `IPreviewHandler` pone la pieza en el panel de vista previa, donde se puede girar, acercar y mover sin abrir nada. |
 | `stpviewer.exe` | Visor 3D independiente, con la misma vista 3D que usa el panel. |
+
+## Formatos
+
+| Formato | Extensiones | Que se ve |
+|---|---|---|
+| STEP | `.stp` `.step` | Solido completo, mallado exacto de plano, cilindro, cono, esfera y toro |
+| IGES | `.igs` `.iges` | Solidos B-rep y superficies recortadas, con sus aristas |
+| DXF | `.dxf` | Lineas, polilineas 2D y 3D, arcos, circulos, `3DFACE`, mallas de caras y bloques |
+| Mallas | `.stl` `.obj` `.ply` | Triangulos con sombreado plano y realce de cantos |
+| Cerrados | `.dwg` `.prt` `.sldprt` `.sldasm` `.ipt` `.iam` `.catpart` | La imagen de vista previa que el CAD guardo dentro del archivo |
+
+La geometria de `.dwg`, `.prt` de NX/Creo, `.sldprt` y demas formatos nativos
+esta en binarios cerrados sin especificacion publica; leerla exigiria el SDK del
+fabricante o una libreria con licencia incompatible. Lo que si se puede, y es lo
+que hace este programa, es sacar la imagen de vista previa que el propio CAD
+dejo incrustada al grabar: sirve para reconocer el archivo en la carpeta, pero
+no se puede girar.
 
 No dependen de ningun kernel CAD externo: el lector de STEP, el mallador y el
 render estan escritos en el repositorio y se compilan a binarios estaticos de
@@ -18,9 +35,9 @@ render estan escritos en el repositorio y se compilan a binarios estaticos de
 1. Descarga o compila la carpeta `dist\`.
 2. Ejecuta `instalar.bat` (doble clic): registra las extensiones, limpia la cache
    de miniaturas y reinicia el Explorador.
-3. Abre una carpeta con archivos STEP y pon la vista en **Iconos grandes**.
+3. Abre una carpeta con modelos y pon la vista en **Iconos grandes**.
 4. Para el panel: menu **Ver > Panel de vista previa** (`Alt+P`) y selecciona un
-   archivo STEP.
+   archivo.
 
 El registro de las miniaturas es por usuario y no pide permisos. El panel de
 vista previa si necesita una clave de maquina (`PreviewHandlers`), asi que el
@@ -96,6 +113,7 @@ instalacion y tres herramientas de apoyo (`steprender`, `thumbtest`,
 
 ```
 src/engine     lector ISO 10303-21, geometria y mallado
+src/formats    IGES, DXF, STL, OBJ, PLY y extraccion de vistas previas
 src/render     rasterizador por software (z-buffer, luces, aristas)
 src/shellext   extensiones COM: miniatura y panel de vista previa
 src/viewer     SceneView (vista 3D interactiva) y el visor independiente
@@ -131,6 +149,9 @@ src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
   cara libre, no. Las superficies analiticas (plano, cilindro, cono, esfera,
   toro), que son la mayoria en piezas mecanicas, si se mallan exactas.
 - No se leen colores ni materiales del archivo: todo se dibuja en gris acero.
+- De los formatos cerrados solo se muestra su imagen incrustada; si el archivo
+  se guardo sin vista previa, no hay nada que ensenar.
+- El DXF binario no se lee; hay que guardarlo como DXF ASCII.
 - Archivos comprimidos `.stpz` se registran pero aun no se descomprimen.
 - Hay topes de trabajo para que ninguna pieza pueda bloquear al Explorador: la
   miniatura se rinde a los 6 s y el panel a los 20 s, dibujando lo que se haya
@@ -140,11 +161,30 @@ src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
 
 ## Rendimiento
 
-El mallado esta acotado por diseno, porque el Explorador llama a estas
+Pensado para equipos modestos: todo el dibujo es por software y el reparto de
+trabajo se ajusta solo.
+
+**Render.** Los vertices se transforman y se sombrean una sola vez, la
+rasterizacion va en `float` con funciones de borde incrementales, y la pantalla
+se reparte en bandas entre los nucleos disponibles. Medido con una pieza de
+27000 triangulos a 900x900:
+
+| Calidad | Antes | Ahora | Ahora, un solo nucleo |
+|---|---|---|---|
+| Sin suavizado | 84 ms (12 fps) | 17 ms (59 fps) | 29 ms (34 fps) |
+| Suavizado x2 | 292 ms (3 fps) | 76 ms (13 fps) | 108 ms (9 fps) |
+| Suavizado x3 | 570 ms (2 fps) | 138 ms (7 fps) | 198 ms (5 fps) |
+
+Ademas la vista mide cuanto tarda cada cuadro y elige sola la calidad: mientras
+se arrastra apunta a 22 ms por cuadro, bajando el suavizado y, si hace falta, la
+resolucion interna (se estira al mostrarla); al soltar el raton redibuja nitido.
+En un equipo lento eso se traduce en giro fluido en vez de saltos.
+
+**Mallado.** Esta acotado por diseno, porque el Explorador llama a estas
 extensiones de forma sincrona y un archivo lento se nota como una carpeta que
-no termina de abrir. Medido en este repositorio con una placa de 1600 agujeros
-(8,3 MB): 2 min 42 s antes de acotar el puenteo de agujeros, 3,7 s ahora. Una
-placa de 400 agujeros tarda 0,9 s y un soporte normal 0,3 s.
+no termina de abrir. Medido con una placa de 1600 agujeros (8,3 MB): 2 min 42 s
+antes de acotar el puenteo de agujeros, 3,7 s ahora. Una placa de 400 agujeros
+tarda 0,9 s y un soporte normal 0,3 s.
 
 ## Pruebas
 

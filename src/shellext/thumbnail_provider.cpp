@@ -3,10 +3,12 @@
 #include <shlwapi.h>
 
 #include <new>
+#include <cctype>
 #include <string>
 #include <vector>
 
-#include "../engine/step_model.h"
+#include "../formats/formats.h"
+#include "../viewer/image_view.h"
 #include "../render/renderer.h"
 
 const CLSID CLSID_StepThumbnailProvider = {
@@ -67,7 +69,21 @@ public:
 
         STATSTG stat = {};
         ULONGLONG size = 0;
-        if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME))) size = stat.cbSize.QuadPart;
+        if (SUCCEEDED(stream->Stat(&stat, 0))) {
+            size = stat.cbSize.QuadPart;
+            if (stat.pwcsName) {
+                // La extension elige el lector; el Explorador la da en el nombre.
+                const std::wstring name = stat.pwcsName;
+                CoTaskMemFree(stat.pwcsName);
+                const std::size_t dot = name.find_last_of(L'.');
+                if (dot != std::wstring::npos) {
+                    for (std::size_t i = dot; i < name.size(); ++i) {
+                        m_extension.push_back(
+                            static_cast<char>(std::tolower(static_cast<int>(name[i]))));
+                    }
+                }
+            }
+        }
         if (size > kMaxThumbnailBytes) return E_FAIL;  // el Explorador usa el icono
 
         std::string buffer;
@@ -96,7 +112,7 @@ public:
         if (cx < 16) cx = 16;
         if (cx > 1024) cx = 1024;
 
-        return RenderStepThumbnail(m_data.data(), m_data.size(), cx, phbmp);
+        return RenderStepThumbnail(m_data.data(), m_data.size(), cx, phbmp, m_extension);
     }
 
 private:
@@ -104,16 +120,30 @@ private:
 
     LONG m_refs = 1;
     std::string m_data;
+    std::string m_extension;
 };
 
 }  // namespace
 
-HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP* out) {
+HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP* out,
+                            const std::string& extension) {
     stp::Mesh mesh;
     std::string error;
-    if (!stp::loadStepMemory(data, length, &mesh, &error, nullptr, qualityForSize(length),
-                             kThumbnailBudgetMs)) {
-        return E_FAIL;
+    if (!stp::loadModel(data, length, extension, &mesh, &error, nullptr, qualityForSize(length),
+                        kThumbnailBudgetMs)) {
+        // Formatos cerrados (.dwg, .sldprt, .prt...): se usa la imagen que el
+        // propio CAD dejo dentro del archivo.
+        std::vector<std::uint8_t> image;
+        if (!stp::extractEmbeddedPreview(data, length, &image)) return E_FAIL;
+
+        int width = 0, height = 0;
+        HBITMAP decoded = stp::decodePreviewImage(image, &width, &height);
+        if (!decoded) return E_FAIL;
+        HBITMAP fitted = stp::fitPreviewToSquare(decoded, width, height, static_cast<int>(size));
+        DeleteObject(decoded);
+        if (!fitted) return E_FAIL;
+        *out = fitted;
+        return S_OK;
     }
     if (mesh.empty() || !mesh.bounds.valid()) return E_FAIL;
 

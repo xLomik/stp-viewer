@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "../engine/step_model.h"
+#include "../formats/formats.h"
 #include "../render/renderer.h"
 
 namespace stp {
@@ -47,7 +47,8 @@ private:
     LRESULT handle(UINT msg, WPARAM wparam, LPARAM lparam);
 
     void onPaint();
-    void render(int supersample);
+    void render(bool interactive);
+    void pickQuality(bool interactive, int* supersample, double* scale) const;
     void drawOverlay(HDC dc);
     void drawTriad(HDC dc);
     void fitView();
@@ -69,7 +70,12 @@ private:
     RenderStyle m_style;
     Framebuffer m_frame;
     int m_frameSupersample = 0;
+    double m_frameScale = 1.0;
     bool m_frameValid = false;
+    bool m_frameInteractive = false;
+    // Coste medido por muestra: permite elegir calidad segun la maquina en vez
+    // de fijar una que va bien solo en equipos rapidos.
+    double m_msPerSample = 0.0;
     bool m_compact = false;
     bool m_hostColors = false;
     bool m_truncated = false;
@@ -79,6 +85,10 @@ private:
 
     std::wstring m_title;
     std::wstring m_message;
+    // Formatos propietarios: se muestra la imagen que el CAD dejo dentro.
+    HBITMAP m_image = nullptr;
+    int m_imageWidth = 0;
+    int m_imageHeight = 0;
     std::shared_ptr<SceneLoadChannel> m_channel;
     std::atomic<unsigned> m_generation{0};
     std::atomic<bool> m_loading{false};

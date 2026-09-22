@@ -3,25 +3,31 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <thread>
+#include <vector>
 
 namespace stp {
 namespace {
 
-struct ViewVertex {
-    Vec3 view;    // camera space: x right, y up, z forward (positive in front)
-    Vec3 normal;  // camera space
+// Vertice ya proyectado a pixeles, con su color resuelto. Sombrear por vertice
+// en vez de por pixel quita el grueso del trabajo del bucle interno, que es lo
+// que se nota en equipos lentos.
+struct ScreenVertex {
+    float x = 0, y = 0, z = 0;
+    float r = 0, g = 0, b = 0;
+    bool visible = false;
 };
 
-struct Projected {
-    double x = 0, y = 0, z = 0;
+struct CameraVertex {
+    Vec3 view;
     Vec3 normal;
 };
 
-inline std::uint8_t channel(double v) {
-    return static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, v)));
+inline std::uint8_t channel(float v) {
+    return static_cast<std::uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
 }
 
-inline std::uint32_t packBgra(double b, double g, double r, double a) {
+inline std::uint32_t packBgra(float b, float g, float r, float a) {
     return (static_cast<std::uint32_t>(channel(a)) << 24) |
            (static_cast<std::uint32_t>(channel(r)) << 16) |
            (static_cast<std::uint32_t>(channel(g)) << 8) | static_cast<std::uint32_t>(channel(b));
@@ -53,245 +59,353 @@ public:
         m_fwd = cam.forward();
         m_tanHalf = std::tan(cam.fov * 0.5);
         m_near = std::max(1e-7, cam.distance * 1e-4);
+
+        const double halfH = cam.orthoHeight * 0.5;
+        m_orthoScaleX = halfH * m_aspect > 0 ? m_raster.w * 0.5 / (halfH * m_aspect) : 1.0;
+        m_orthoScaleY = halfH > 0 ? m_raster.h * 0.5 / halfH : 1.0;
+        m_perspScaleX = m_raster.w * 0.5 / (m_tanHalf * m_aspect);
+        m_perspScaleY = m_raster.h * 0.5 / m_tanHalf;
+        m_centerX = m_raster.w * 0.5;
+        m_centerY = m_raster.h * 0.5;
+
+        m_faceR = ((style.faceColor >> 16) & 0xFF) / 255.0f;
+        m_faceG = ((style.faceColor >> 8) & 0xFF) / 255.0f;
+        m_faceB = (style.faceColor & 0xFF) / 255.0f;
     }
 
-    ViewVertex toView(const Vec3& p, const Vec3& n) const {
+    CameraVertex toCamera(const Vec3& p, const Vec3& n) const {
         const Vec3 d = p - m_eye;
-        ViewVertex v;
+        CameraVertex v;
         v.view = Vec3(dot(d, m_right), dot(d, m_up), dot(d, m_fwd));
         v.normal = Vec3(dot(n, m_right), dot(n, m_up), dot(n, m_fwd));
         return v;
     }
 
-    bool project(const ViewVertex& v, Projected* out) const {
+    ScreenVertex project(const CameraVertex& v, bool shaded) const {
+        ScreenVertex s;
         if (m_cam.ortho) {
-            const double halfH = m_cam.orthoHeight * 0.5;
-            const double halfW = halfH * m_aspect;
-            out->x = (v.view.x / halfW * 0.5 + 0.5) * m_raster.w;
-            out->y = (0.5 - v.view.y / halfH * 0.5) * m_raster.h;
-            out->z = v.view.z;
+            s.x = static_cast<float>(m_centerX + v.view.x * m_orthoScaleX);
+            s.y = static_cast<float>(m_centerY - v.view.y * m_orthoScaleY);
+            s.z = static_cast<float>(v.view.z);
+            s.visible = true;
         } else {
-            if (v.view.z <= m_near) return false;
-            const double ndcX = (v.view.x / v.view.z) / (m_tanHalf * m_aspect);
-            const double ndcY = (v.view.y / v.view.z) / m_tanHalf;
-            out->x = (ndcX * 0.5 + 0.5) * m_raster.w;
-            out->y = (0.5 - ndcY * 0.5) * m_raster.h;
-            out->z = v.view.z;
+            if (v.view.z <= m_near) return s;
+            const double inv = 1.0 / v.view.z;
+            s.x = static_cast<float>(m_centerX + v.view.x * inv * m_perspScaleX);
+            s.y = static_cast<float>(m_centerY - v.view.y * inv * m_perspScaleY);
+            s.z = static_cast<float>(v.view.z);
+            s.visible = true;
         }
-        out->normal = v.normal;
-        return true;
+        if (shaded) shade(v.normal, &s.r, &s.g, &s.b);
+        return s;
+    }
+
+    void shade(const Vec3& nCam, float* r, float* g, float* b) const {
+        const Vec3 n = normalize(nCam);
+        // Las luces viven en espacio de camara: la pieza siempre queda iluminada
+        // desde el punto de vista del observador.
+        static const Vec3 key = normalize(Vec3(-0.35, 0.45, -1.0));
+        static const Vec3 fill = normalize(Vec3(0.6, -0.25, -0.6));
+        const float kd = static_cast<float>(std::fabs(dot(n, key)));
+        const float kf = static_cast<float>(std::fabs(dot(n, fill)));
+        const float facing = static_cast<float>(std::fabs(n.z));
+        const float rim = (1.0f - std::min(1.0f, facing));
+        const float rim3 = rim * rim * rim;
+
+        const float base = 0.20f + 0.68f * kd + 0.22f * kf;
+        const float kd2 = kd * kd;
+        const float kd8 = kd2 * kd2 * kd2 * kd2;
+        const float spec = kd8 * kd8 * kd8 * kd8 * kd8 * 0.45f;  // kd^40 aprox.
+
+        *r = (m_faceR * base + spec + rim3 * 0.10f) * 255.0f;
+        *g = (m_faceG * base + spec + rim3 * 0.11f) * 255.0f;
+        *b = (m_faceB * base + spec + rim3 * 0.13f) * 255.0f;
     }
 
     void drawBackground() {
         if (m_style.transparentBackground) return;
         for (int y = 0; y < m_raster.h; ++y) {
-            const double t = m_raster.h > 1 ? static_cast<double>(y) / (m_raster.h - 1) : 0.0;
+            const float t = m_raster.h > 1 ? static_cast<float>(y) / (m_raster.h - 1) : 0.0f;
             const std::uint32_t a = m_style.backgroundTop;
             const std::uint32_t b = m_style.backgroundBottom;
-            const double r = ((a >> 16) & 0xFF) * (1 - t) + ((b >> 16) & 0xFF) * t;
-            const double g = ((a >> 8) & 0xFF) * (1 - t) + ((b >> 8) & 0xFF) * t;
-            const double bl = (a & 0xFF) * (1 - t) + (b & 0xFF) * t;
+            const float r = ((a >> 16) & 0xFF) * (1 - t) + ((b >> 16) & 0xFF) * t;
+            const float g = ((a >> 8) & 0xFF) * (1 - t) + ((b >> 8) & 0xFF) * t;
+            const float bl = (a & 0xFF) * (1 - t) + (b & 0xFF) * t;
             const std::uint32_t c = packBgra(bl, g, r, 255);
             std::fill(m_raster.color.begin() + static_cast<std::size_t>(y) * m_raster.w,
                       m_raster.color.begin() + static_cast<std::size_t>(y + 1) * m_raster.w, c);
         }
     }
 
-    void shade(const Vec3& nCam, double* r, double* g, double* b) const {
-        const Vec3 n = normalize(nCam);
-        // Lights live in camera space so the model is always lit from the viewer.
-        static const Vec3 key = normalize(Vec3(-0.35, 0.45, -1.0));
-        static const Vec3 fill = normalize(Vec3(0.6, -0.25, -0.6));
-        const double kd = std::fabs(dot(n, key));
-        const double kf = std::fabs(dot(n, fill));
-        const double rim = std::pow(1.0 - std::min(1.0, std::fabs(n.z)), 3.0);
-
-        const double base = 0.20 + 0.68 * kd + 0.22 * kf;
-        const double spec = std::pow(std::max(0.0, kd), 42.0) * 0.45;
-
-        const double cr = ((m_style.faceColor >> 16) & 0xFF) / 255.0;
-        const double cg = ((m_style.faceColor >> 8) & 0xFF) / 255.0;
-        const double cb = (m_style.faceColor & 0xFF) / 255.0;
-        *r = (cr * base + spec + rim * 0.10) * 255.0;
-        *g = (cg * base + spec + rim * 0.11) * 255.0;
-        *b = (cb * base + spec + rim * 0.13) * 255.0;
-    }
-
-    void triangle(const Projected& a, const Projected& b, const Projected& c) {
-        const double area = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-        if (std::fabs(area) < 1e-12) return;
+    // Rasteriza dentro de la banda [bandY0, bandY1). Cada hilo escribe solo en
+    // su banda, asi que no hay que sincronizar nada.
+    void triangle(const ScreenVertex& a, const ScreenVertex& b, const ScreenVertex& c, int bandY0,
+                  int bandY1) {
+        const float area = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+        if (!(std::fabs(area) > 1e-7f)) return;
 
         int minX = static_cast<int>(std::floor(std::min({a.x, b.x, c.x})));
         int maxX = static_cast<int>(std::ceil(std::max({a.x, b.x, c.x})));
         int minY = static_cast<int>(std::floor(std::min({a.y, b.y, c.y})));
         int maxY = static_cast<int>(std::ceil(std::max({a.y, b.y, c.y})));
         minX = std::max(0, minX);
-        minY = std::max(0, minY);
+        minY = std::max(bandY0, minY);
         maxX = std::min(m_raster.w - 1, maxX);
-        maxY = std::min(m_raster.h - 1, maxY);
+        maxY = std::min(bandY1 - 1, maxY);
         if (minX > maxX || minY > maxY) return;
 
-        const double invArea = 1.0 / area;
-        for (int y = minY; y <= maxY; ++y) {
-            for (int x = minX; x <= maxX; ++x) {
-                const double px = x + 0.5;
-                const double py = y + 0.5;
-                double w0 = ((b.x - a.x) * (py - a.y) - (px - a.x) * (b.y - a.y)) * invArea;
-                double w1 = ((px - a.x) * (c.y - a.y) - (c.x - a.x) * (py - a.y)) * invArea;
-                const double w2 = 1.0 - w0 - w1;
-                if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
-                const double la = w2, lb = w1, lc = w0;
+        const float invArea = 1.0f / area;
+        // Funciones de borde incrementales: sin divisiones dentro del bucle.
+        const float w0dx = (a.y - b.y) * invArea;
+        const float w0dy = (b.x - a.x) * invArea;
+        const float w1dx = (c.y - a.y) * invArea;
+        const float w1dy = (a.x - c.x) * invArea;
 
-                const double z = a.z * la + b.z * lb + c.z * lc;
-                const std::size_t idx = static_cast<std::size_t>(y) * m_raster.w + x;
+        const float px0 = minX + 0.5f;
+        const float py0 = minY + 0.5f;
+        float w0Row = ((b.x - a.x) * (py0 - a.y) - (px0 - a.x) * (b.y - a.y)) * invArea;
+        float w1Row = ((px0 - a.x) * (c.y - a.y) - (c.x - a.x) * (py0 - a.y)) * invArea;
+
+        for (int y = minY; y <= maxY; ++y) {
+            float w0 = w0Row;
+            float w1 = w1Row;
+            std::size_t idx = static_cast<std::size_t>(y) * m_raster.w + minX;
+            for (int x = minX; x <= maxX; ++x, ++idx, w0 += w0dx, w1 += w1dx) {
+                const float w2 = 1.0f - w0 - w1;
+                if (w0 < -1e-5f || w1 < -1e-5f || w2 < -1e-5f) continue;
+                const float la = w2, lb = w1, lc = w0;
+
+                const float z = a.z * la + b.z * lb + c.z * lc;
                 if (z >= m_raster.depth[idx]) continue;
 
-                const Vec3 n = a.normal * la + b.normal * lb + c.normal * lc;
-                double r, g, bl;
-                shade(n, &r, &g, &bl);
-                m_raster.depth[idx] = static_cast<float>(z);
-                m_raster.color[idx] = packBgra(bl, g, r, 255);
+                m_raster.depth[idx] = z;
+                m_raster.color[idx] = packBgra(a.b * la + b.b * lb + c.b * lc,
+                                               a.g * la + b.g * lb + c.g * lc,
+                                               a.r * la + b.r * lb + c.r * lc, 255.0f);
             }
+            w0Row += w0dy;
+            w1Row += w1dy;
         }
     }
 
-    void line(const Projected& a, const Projected& b, std::uint32_t rgb) {
-        const double dx = b.x - a.x;
-        const double dy = b.y - a.y;
+    void line(const ScreenVertex& a, const ScreenVertex& b, float cr, float cg, float cb,
+              int bandY0, int bandY1) {
+        const float dx = b.x - a.x;
+        const float dy = b.y - a.y;
         const int steps = static_cast<int>(std::ceil(std::max(std::fabs(dx), std::fabs(dy))));
-        if (steps <= 0) return;
-        if (steps > 8 * (m_raster.w + m_raster.h)) return;
-
-        const double cr = (rgb >> 16) & 0xFF;
-        const double cg = (rgb >> 8) & 0xFF;
-        const double cb = rgb & 0xFF;
+        if (steps <= 0 || steps > 8 * (m_raster.w + m_raster.h)) return;
 
         const int half = std::max(0, (m_lineWidth - 1) / 2);
+        const float invSteps = 1.0f / steps;
         for (int i = 0; i <= steps; ++i) {
-            const double t = static_cast<double>(i) / steps;
-            const double x = a.x + dx * t;
-            const double y = a.y + dy * t;
-            const double z = a.z + (b.z - a.z) * t;
-            const int cx = static_cast<int>(x);
-            const int cy = static_cast<int>(y);
+            const float t = i * invSteps;
+            const int cx = static_cast<int>(a.x + dx * t);
+            const int cy = static_cast<int>(a.y + dy * t);
+            const float z = a.z + (b.z - a.z) * t;
             for (int oy = -half; oy <= half; ++oy) {
+                const int yi = cy + oy;
+                if (yi < bandY0 || yi >= bandY1) continue;
                 for (int ox = -half; ox <= half; ++ox) {
                     const int xi = cx + ox;
-                    const int yi = cy + oy;
-                    if (xi < 0 || yi < 0 || xi >= m_raster.w || yi >= m_raster.h) continue;
+                    if (xi < 0 || xi >= m_raster.w) continue;
                     const std::size_t idx = static_cast<std::size_t>(yi) * m_raster.w + xi;
-                    // Pull edges slightly towards the camera so they win the depth test.
-                    if (z > m_raster.depth[idx] * 1.0008 + m_bias) continue;
-                    m_raster.color[idx] = packBgra(cb, cg, cr, 255);
-                    m_raster.depth[idx] =
-                        static_cast<float>(std::min<double>(m_raster.depth[idx], z));
+                    // Las aristas se acercan un pelo a la camara para ganar el
+                    // test de profundidad contra la cara que las contiene.
+                    if (z > m_raster.depth[idx] * 1.0008f + m_bias) continue;
+                    m_raster.color[idx] = packBgra(cb, cg, cr, 255.0f);
+                    m_raster.depth[idx] = std::min(m_raster.depth[idx], z);
                 }
             }
         }
     }
 
-    // Clips a segment to the near plane in camera space (perspective only).
-    bool clipSegment(ViewVertex* a, ViewVertex* b) const {
+    // Recorta contra el plano cercano y dibuja; solo hace falta en perspectiva.
+    void triangleClipped(const CameraVertex& v0, const CameraVertex& v1, const CameraVertex& v2,
+                         int bandY0, int bandY1) {
+        CameraVertex poly[4];
+        int count = 0;
+        const CameraVertex src[3] = {v0, v1, v2};
+        for (int i = 0; i < 3 && count < 4; ++i) {
+            const CameraVertex& cur = src[i];
+            const CameraVertex& nxt = src[(i + 1) % 3];
+            const bool curIn = cur.view.z > m_near;
+            const bool nxtIn = nxt.view.z > m_near;
+            if (curIn) poly[count++] = cur;
+            if (curIn != nxtIn && count < 4) {
+                const double t = (m_near - cur.view.z) / (nxt.view.z - cur.view.z);
+                CameraVertex mid;
+                mid.view = cur.view + (nxt.view - cur.view) * t;
+                mid.normal = cur.normal + (nxt.normal - cur.normal) * t;
+                poly[count++] = mid;
+            }
+        }
+        if (count < 3) return;
+        const ScreenVertex first = project(poly[0], true);
+        for (int i = 2; i < count; ++i) {
+            triangle(first, project(poly[i - 1], true), project(poly[i], true), bandY0, bandY1);
+        }
+    }
+
+    void run(const Mesh& mesh, int threadCount) {
+        drawBackground();
+        m_bias = static_cast<float>(mesh.bounds.diagonal() * 1e-4);
+
+        const std::size_t vertexCount = mesh.positions.size();
+        std::vector<ScreenVertex> screen;
+        std::vector<CameraVertex> camera;
+        const bool needClip = !m_cam.ortho;
+
+        if (m_style.drawFaces && vertexCount > 0) {
+            screen.resize(vertexCount);
+            if (needClip) camera.resize(vertexCount);
+            // Cada vertice se transforma y se sombrea una sola vez, aunque lo
+            // compartan muchos triangulos.
+            parallelFor(vertexCount, threadCount, [&](std::size_t begin, std::size_t end) {
+                for (std::size_t i = begin; i < end; ++i) {
+                    const CameraVertex cv = toCamera(mesh.positions[i], mesh.normals[i]);
+                    if (needClip) camera[i] = cv;
+                    screen[i] = project(cv, true);
+                }
+            });
+        }
+
+        std::vector<ScreenVertex> edgeScreen;
+        std::vector<CameraVertex> edgeCamera;
+        if (m_style.drawEdges && !mesh.edgeLines.empty()) {
+            edgeScreen.resize(mesh.edgeLines.size());
+            if (needClip) edgeCamera.resize(mesh.edgeLines.size());
+            parallelFor(mesh.edgeLines.size(), threadCount,
+                        [&](std::size_t begin, std::size_t end) {
+                            for (std::size_t i = begin; i < end; ++i) {
+                                const CameraVertex cv = toCamera(mesh.edgeLines[i], Vec3(0, 0, 1));
+                                if (needClip) edgeCamera[i] = cv;
+                                edgeScreen[i] = project(cv, false);
+                            }
+                        });
+        }
+
+        const float edgeR = static_cast<float>((m_style.edgeColor >> 16) & 0xFF);
+        const float edgeG = static_cast<float>((m_style.edgeColor >> 8) & 0xFF);
+        const float edgeB = static_cast<float>(m_style.edgeColor & 0xFF);
+
+        // El reparto es por bandas de pixeles: cada hilo es dueno de las suyas.
+        const int bands = std::max(1, threadCount);
+        auto renderBand = [&](int band) {
+            const int y0 = static_cast<int>(static_cast<long long>(m_raster.h) * band / bands);
+            const int y1 = static_cast<int>(static_cast<long long>(m_raster.h) * (band + 1) / bands);
+            if (y0 >= y1) return;
+
+            if (m_style.drawFaces) {
+                for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+                    const std::uint32_t i0 = mesh.indices[i];
+                    const std::uint32_t i1 = mesh.indices[i + 1];
+                    const std::uint32_t i2 = mesh.indices[i + 2];
+                    const ScreenVertex& a = screen[i0];
+                    const ScreenVertex& b = screen[i1];
+                    const ScreenVertex& c = screen[i2];
+                    if (a.visible && b.visible && c.visible) {
+                        const float minY = std::min({a.y, b.y, c.y});
+                        const float maxY = std::max({a.y, b.y, c.y});
+                        if (maxY < y0 || minY > y1) continue;
+                        const float minX = std::min({a.x, b.x, c.x});
+                        const float maxX = std::max({a.x, b.x, c.x});
+                        if (maxX < 0 || minX > m_raster.w) continue;
+                        triangle(a, b, c, y0, y1);
+                    } else if (needClip) {
+                        triangleClipped(camera[i0], camera[i1], camera[i2], y0, y1);
+                    }
+                }
+            }
+            if (m_style.drawEdges) {
+                for (std::size_t i = 0; i + 1 < edgeScreen.size(); i += 2) {
+                    const ScreenVertex& a = edgeScreen[i];
+                    const ScreenVertex& b = edgeScreen[i + 1];
+                    if (a.visible && b.visible) {
+                        if (std::max(a.y, b.y) < y0 - m_lineWidth ||
+                            std::min(a.y, b.y) > y1 + m_lineWidth) {
+                            continue;
+                        }
+                        line(a, b, edgeR, edgeG, edgeB, y0, y1);
+                    } else if (needClip) {
+                        CameraVertex ca = edgeCamera[i];
+                        CameraVertex cb = edgeCamera[i + 1];
+                        if (!clipSegment(&ca, &cb)) continue;
+                        line(project(ca, false), project(cb, false), edgeR, edgeG, edgeB, y0, y1);
+                    }
+                }
+            }
+        };
+
+        if (bands == 1) {
+            renderBand(0);
+        } else {
+            std::vector<std::thread> workers;
+            workers.reserve(bands - 1);
+            for (int band = 1; band < bands; ++band) {
+                workers.emplace_back([&renderBand, band]() { renderBand(band); });
+            }
+            renderBand(0);
+            for (std::thread& worker : workers) worker.join();
+        }
+    }
+
+    bool clipSegment(CameraVertex* a, CameraVertex* b) const {
         if (m_cam.ortho) return true;
-        double za = a->view.z;
-        double zb = b->view.z;
+        const double za = a->view.z;
+        const double zb = b->view.z;
         if (za <= m_near && zb <= m_near) return false;
         if (za < m_near) {
             const double t = (m_near - za) / (zb - za);
             a->view = a->view + (b->view - a->view) * t;
-            a->normal = a->normal + (b->normal - a->normal) * t;
         } else if (zb < m_near) {
             const double t = (m_near - zb) / (za - zb);
             b->view = b->view + (a->view - b->view) * t;
-            b->normal = b->normal + (a->normal - b->normal) * t;
         }
         return true;
-    }
-
-    void drawTriangleClipped(ViewVertex v0, ViewVertex v1, ViewVertex v2) {
-        if (!m_cam.ortho) {
-            ViewVertex in[3];
-            int inCount = 0;
-            ViewVertex out[3];
-            int outCount = 0;
-            const ViewVertex src[3] = {v0, v1, v2};
-            for (int i = 0; i < 3; ++i) {
-                if (src[i].view.z > m_near) in[inCount++] = src[i];
-                else out[outCount++] = src[i];
-            }
-            if (inCount == 0) return;
-            if (inCount < 3) {
-                // Rebuild the visible polygon by clipping each crossing edge.
-                std::vector<ViewVertex> poly;
-                for (int i = 0; i < 3; ++i) {
-                    const ViewVertex& cur = src[i];
-                    const ViewVertex& nxt = src[(i + 1) % 3];
-                    const bool curIn = cur.view.z > m_near;
-                    const bool nxtIn = nxt.view.z > m_near;
-                    if (curIn) poly.push_back(cur);
-                    if (curIn != nxtIn) {
-                        const double t = (m_near - cur.view.z) / (nxt.view.z - cur.view.z);
-                        ViewVertex mid;
-                        mid.view = cur.view + (nxt.view - cur.view) * t;
-                        mid.normal = cur.normal + (nxt.normal - cur.normal) * t;
-                        poly.push_back(mid);
-                    }
-                }
-                for (std::size_t i = 2; i < poly.size(); ++i) {
-                    Projected pa, pb, pc;
-                    if (project(poly[0], &pa) && project(poly[i - 1], &pb) &&
-                        project(poly[i], &pc)) {
-                        triangle(pa, pb, pc);
-                    }
-                }
-                return;
-            }
-            (void)out;
-            (void)outCount;
-        }
-        Projected pa, pb, pc;
-        if (project(v0, &pa) && project(v1, &pb) && project(v2, &pc)) triangle(pa, pb, pc);
-    }
-
-    void run(const Mesh& mesh) {
-        drawBackground();
-        m_bias = mesh.bounds.diagonal() * 1e-4;
-
-        if (m_style.drawFaces) {
-            for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-                const std::uint32_t i0 = mesh.indices[i];
-                const std::uint32_t i1 = mesh.indices[i + 1];
-                const std::uint32_t i2 = mesh.indices[i + 2];
-                drawTriangleClipped(toView(mesh.positions[i0], mesh.normals[i0]),
-                                    toView(mesh.positions[i1], mesh.normals[i1]),
-                                    toView(mesh.positions[i2], mesh.normals[i2]));
-            }
-        }
-        if (m_style.drawEdges) {
-            const std::uint32_t rgb = m_style.edgeColor & 0x00FFFFFF;
-            for (std::size_t i = 0; i + 1 < mesh.edgeLines.size(); i += 2) {
-                ViewVertex a = toView(mesh.edgeLines[i], Vec3(0, 0, 1));
-                ViewVertex b = toView(mesh.edgeLines[i + 1], Vec3(0, 0, 1));
-                if (!clipSegment(&a, &b)) continue;
-                Projected pa, pb;
-                if (project(a, &pa) && project(b, &pb)) line(pa, pb, rgb);
-            }
-        }
     }
 
     const Raster& raster() const { return m_raster; }
 
 private:
+    template <typename Fn>
+    static void parallelFor(std::size_t count, int threadCount, Fn body) {
+        const int workers = std::max(1, threadCount);
+        if (workers == 1 || count < 4096) {
+            body(0, count);
+            return;
+        }
+        std::vector<std::thread> pool;
+        pool.reserve(workers - 1);
+        for (int i = 1; i < workers; ++i) {
+            const std::size_t begin = count * i / workers;
+            const std::size_t end = count * (i + 1) / workers;
+            pool.emplace_back([&body, begin, end]() { body(begin, end); });
+        }
+        body(0, count / workers);
+        for (std::thread& worker : pool) worker.join();
+    }
+
     const Camera& m_cam;
     const RenderStyle& m_style;
     Raster m_raster;
     double m_aspect = 1.0;
     double m_tanHalf = 0.3;
     double m_near = 1e-4;
-    double m_bias = 0.0;
+    double m_orthoScaleX = 1.0, m_orthoScaleY = 1.0;
+    double m_perspScaleX = 1.0, m_perspScaleY = 1.0;
+    double m_centerX = 0.0, m_centerY = 0.0;
+    float m_bias = 0.0f;
+    float m_faceR = 0.7f, m_faceG = 0.75f, m_faceB = 0.8f;
     int m_lineWidth = 1;
     Vec3 m_eye, m_right, m_up, m_fwd;
 };
+
+int resolveThreads(int requested) {
+    if (requested > 0) return std::min(requested, 16);
+    const unsigned hardware = std::thread::hardware_concurrency();
+    if (hardware == 0) return 2;
+    return static_cast<int>(std::min(hardware, 8u));
+}
 
 }  // namespace
 
@@ -374,34 +488,45 @@ void renderMesh(const Mesh& mesh, const Camera& camera, const RenderStyle& style
     const int ss = std::max(1, std::min(4, style.supersample));
     const int rw = width * ss;
     const int rh = height * ss;
+    const int threads = resolveThreads(style.threads);
 
     Renderer renderer(camera, style, rw, rh, ss);
-    renderer.run(mesh);
+    renderer.run(mesh, threads);
 
     out->resize(width, height);
     const Raster& src = renderer.raster();
     const bool transparent = style.transparentBackground;
 
+    if (ss == 1) {
+        if (!transparent) {
+            std::copy(src.color.begin(), src.color.end(), out->pixels.begin());
+            return;
+        }
+        for (std::size_t i = 0; i < out->pixels.size(); ++i) {
+            out->pixels[i] = src.color[i];
+        }
+        return;
+    }
+
+    const float inv = 1.0f / (static_cast<float>(ss) * ss);
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            double r = 0, g = 0, b = 0, a = 0;
+            float r = 0, g = 0, b = 0, a = 0;
             for (int sy = 0; sy < ss; ++sy) {
+                const std::size_t row = static_cast<std::size_t>(y * ss + sy) * rw + x * ss;
                 for (int sx = 0; sx < ss; ++sx) {
-                    const std::size_t idx =
-                        static_cast<std::size_t>(y * ss + sy) * rw + (x * ss + sx);
-                    const std::uint32_t c = src.color[idx];
-                    const double ca = ((c >> 24) & 0xFF) / 255.0;
+                    const std::uint32_t c = src.color[row + sx];
+                    const float ca = ((c >> 24) & 0xFF) * (1.0f / 255.0f);
                     r += ((c >> 16) & 0xFF) * ca;
                     g += ((c >> 8) & 0xFF) * ca;
                     b += (c & 0xFF) * ca;
                     a += ca;
                 }
             }
-            const double n = static_cast<double>(ss) * ss;
-            const double alpha = transparent ? a / n : 1.0;
-            // Premultiplied BGRA, which is what Windows expects for WTSAT_ARGB.
+            const float alpha = transparent ? a * inv : 1.0f;
+            // BGRA con alfa premultiplicado, que es lo que espera WTSAT_ARGB.
             out->pixels[static_cast<std::size_t>(y) * width + x] =
-                packBgra(b / n, g / n, r / n, alpha * 255.0);
+                packBgra(b * inv, g * inv, r * inv, alpha * 255.0f);
         }
     }
 }

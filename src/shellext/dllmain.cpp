@@ -23,7 +23,12 @@ const wchar_t* kThumbnailClsid = L"{90D4532D-A5D0-49A7-B115-800AD0042693}";
 const wchar_t* kPreviewClsid = L"{B718893F-E5EC-4CD8-BF74-D02BC81308C3}";
 const wchar_t* kThumbnailName = L"stp-viewer STEP thumbnail provider";
 const wchar_t* kPreviewName = L"stp-viewer STEP preview handler";
-const wchar_t* kExtensions[] = {L".stp", L".step", L".stpz"};
+// Formatos con geometria propia y, al final, los cerrados de los que solo se
+// puede sacar la imagen de vista previa que guardo el CAD.
+const wchar_t* kExtensions[] = {L".stp",     L".step",   L".stpz",  L".igs",  L".iges",
+                                L".dxf",     L".stl",    L".obj",   L".ply",  L".dwg",
+                                L".prt",     L".sldprt", L".sldasm", L".ipt", L".iam",
+                                L".catpart", L".catproduct"};
 const wchar_t* kPreviewHandlersKey =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers";
 

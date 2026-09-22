@@ -3,9 +3,12 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cctype>
 #include <memory>
 #include <mutex>
 #include <thread>
+
+#include "image_view.h"
 
 namespace stp {
 namespace {
@@ -60,6 +63,7 @@ struct SceneLoadResult {
     LoadStats stats;
     std::wstring title;
     std::wstring error;
+    std::vector<std::uint8_t> image;  // vista previa incrustada, si la hay
     unsigned generation = 0;
 };
 
@@ -120,6 +124,10 @@ bool SceneView::create(HINSTANCE instance, HWND parent, const RECT& rect) {
 }
 
 void SceneView::destroy() {
+    if (m_image) {
+        DeleteObject(m_image);
+        m_image = nullptr;
+    }
     if (m_channel) {
         std::lock_guard<std::mutex> lock(m_channel->mutex);
         m_channel->dead = true;
@@ -190,18 +198,30 @@ void SceneView::loadMemory(std::string bytes, const std::wstring& title) {
     invalidate();
     UpdateWindow(m_hwnd);
 
+    // La extension guia al lector; si falta, se deduce del contenido.
+    std::string extension;
+    const std::size_t dot = title.find_last_of(L'.');
+    if (dot != std::wstring::npos) {
+        for (std::size_t i = dot; i < title.size(); ++i) {
+            extension.push_back(static_cast<char>(std::tolower(static_cast<int>(title[i]))));
+        }
+    }
+
     auto channel = m_channel;
     HWND hwnd = m_hwnd;
     const int budgetMs = m_budgetMs;
-    std::thread([channel, hwnd, generation, title, budgetMs, data = std::move(bytes)]() {
+    std::thread([channel, hwnd, generation, title, budgetMs, extension,
+                 data = std::move(bytes)]() {
         auto result = std::make_unique<SceneLoadResult>();
         result->generation = generation;
         result->title = title;
         std::string error;
         // Tope de tiempo: mas vale una malla incompleta que una ventana colgada.
-        if (!loadStepMemory(data.data(), data.size(), &result->mesh, &error, &result->stats,
-                            0.0008, budgetMs)) {
+        if (!loadModel(data.data(), data.size(), extension, &result->mesh, &error, &result->stats,
+                       0.0008, budgetMs)) {
             result->error = utf8ToWide(error);
+            // Sin geometria legible aun queda la imagen que guardo el CAD.
+            extractEmbeddedPreview(data.data(), data.size(), &result->image);
         }
 
         std::lock_guard<std::mutex> lock(channel->mutex);
@@ -215,6 +235,21 @@ void SceneView::applyModel(SceneLoadResult* result) {
     m_loading = false;
     if (!result || result->generation != m_generation.load()) return;
 
+    if (m_image) {
+        DeleteObject(m_image);
+        m_image = nullptr;
+    }
+    if (!result->image.empty()) {
+        m_image = decodePreviewImage(result->image, &m_imageWidth, &m_imageHeight);
+    }
+    if (m_image) {
+        m_mesh = Mesh();
+        m_title = result->title;
+        m_message.clear();
+        m_frameValid = false;
+        invalidate();
+        return;
+    }
     if (!result->error.empty() || result->mesh.empty()) {
         m_mesh = Mesh();
         m_message = result->error.empty() ? L"El archivo no contiene geometria legible"
@@ -246,11 +281,70 @@ void SceneView::setStandardView(double yaw, double pitch) {
     fitView();
 }
 
-void SceneView::render(int supersample) {
+// Elige supermuestreo y escala de render para que un cuadro tarde lo previsto:
+// unos 22 ms mientras se arrastra (fluido) y hasta 300 ms en reposo (nitido).
+void SceneView::pickQuality(bool interactive, int* supersample, double* scale) const {
+    *supersample = 1;
+    *scale = 1.0;
+    if (m_msPerSample <= 0.0) {
+        // Primer cuadro: sin medida todavia, se arranca prudente.
+        *supersample = interactive ? 1 : 2;
+        return;
+    }
+
+    const double budgetMs = interactive ? 22.0 : 300.0;
+    const double pixels = static_cast<double>(m_width) * m_height;
+    struct Option {
+        double scale;
+        int supersample;
+    };
+    // De mas a menos calidad; se toma la primera que entra en el presupuesto.
+    const Option options[] = {{1.0, 3}, {1.0, 2}, {1.0, 1}, {0.75, 1}, {0.5, 1}};
+    for (const Option& option : options) {
+        if (!interactive && option.scale < 1.0) continue;
+        const double samples = pixels * option.scale * option.scale * option.supersample *
+                               option.supersample;
+        if (samples * m_msPerSample <= budgetMs) {
+            *scale = option.scale;
+            *supersample = option.supersample;
+            return;
+        }
+    }
+    *scale = interactive ? 0.5 : 1.0;
+    *supersample = 1;
+}
+
+void SceneView::render(bool interactive) {
     if (m_width <= 0 || m_height <= 0) return;
+
+    int supersample = 1;
+    double scale = 1.0;
+    pickQuality(interactive, &supersample, &scale);
+
+    const int width = std::max(16, static_cast<int>(m_width * scale));
+    const int height = std::max(16, static_cast<int>(m_height * scale));
+
+    LARGE_INTEGER frequency = {}, start = {}, stop = {};
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&start);
+
     m_style.supersample = supersample;
-    renderMesh(m_mesh, m_camera, m_style, m_width, m_height, &m_frame);
+    renderMesh(m_mesh, m_camera, m_style, width, height, &m_frame);
+
+    QueryPerformanceCounter(&stop);
+    if (frequency.QuadPart > 0) {
+        const double ms = 1000.0 * (stop.QuadPart - start.QuadPart) / frequency.QuadPart;
+        const double samples = static_cast<double>(width) * height * supersample * supersample;
+        if (samples > 0 && ms > 0) {
+            const double measured = ms / samples;
+            // Media suave: un cuadro raro no debe cambiar la calidad de golpe.
+            m_msPerSample = m_msPerSample > 0 ? m_msPerSample * 0.6 + measured * 0.4 : measured;
+        }
+    }
+
     m_frameSupersample = supersample;
+    m_frameScale = scale;
+    m_frameInteractive = interactive;
     m_frameValid = true;
 }
 
@@ -301,7 +395,12 @@ void SceneView::drawOverlay(HDC dc) {
     SetBkMode(dc, TRANSPARENT);
 
     const int pad = scaled(m_compact ? 8 : 12);
-    if (!m_mesh.empty()) {
+    if (m_image) {
+        RECT box = {pad, pad, m_width - pad, pad + scaled(20)};
+        SetTextColor(dc, m_textColor);
+        DrawTextW(dc, (m_title + L"   (vista previa guardada por el CAD)").c_str(), -1, &box,
+                  DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    } else if (!m_mesh.empty()) {
         const Vec3 size = m_mesh.bounds.size();
         wchar_t line[512];
         if (m_compact) {
@@ -347,7 +446,33 @@ void SceneView::onPaint() {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(m_hwnd, &ps);
 
-    if (!m_frameValid && !m_mesh.empty()) render(m_orbiting || m_panning ? 1 : 2);
+    if (m_image) {
+        RECT client;
+        GetClientRect(m_hwnd, &client);
+        HBRUSH brush = CreateSolidBrush(m_hostColors ? RGB((m_style.backgroundTop >> 16) & 0xFF,
+                                                           (m_style.backgroundTop >> 8) & 0xFF,
+                                                           m_style.backgroundTop & 0xFF)
+                                                     : RGB(24, 30, 38));
+        FillRect(dc, &client, brush);
+        DeleteObject(brush);
+
+        const double scale = std::min(static_cast<double>(m_width) / std::max(1, m_imageWidth),
+                                      static_cast<double>(m_height) / std::max(1, m_imageHeight));
+        const int w = std::max(1, static_cast<int>(m_imageWidth * scale));
+        const int h = std::max(1, static_cast<int>(m_imageHeight * scale));
+        HDC memory = CreateCompatibleDC(dc);
+        HGDIOBJ old = SelectObject(memory, m_image);
+        SetStretchBltMode(dc, HALFTONE);
+        StretchBlt(dc, (m_width - w) / 2, (m_height - h) / 2, w, h, memory, 0, 0, m_imageWidth,
+                   m_imageHeight, SRCCOPY);
+        SelectObject(memory, old);
+        DeleteDC(memory);
+        drawOverlay(dc);
+        EndPaint(m_hwnd, &ps);
+        return;
+    }
+
+    if (!m_frameValid && !m_mesh.empty()) render(m_orbiting || m_panning);
 
     if (m_frameValid && m_frame.width > 0 && !m_mesh.empty()) {
         BITMAPINFO info = {};
@@ -357,8 +482,16 @@ void SceneView::onPaint() {
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
-        SetDIBitsToDevice(dc, 0, 0, m_frame.width, m_frame.height, 0, 0, 0, m_frame.height,
-                          m_frame.pixels.data(), &info, DIB_RGB_COLORS);
+        if (m_frame.width == m_width && m_frame.height == m_height) {
+            SetDIBitsToDevice(dc, 0, 0, m_frame.width, m_frame.height, 0, 0, 0, m_frame.height,
+                              m_frame.pixels.data(), &info, DIB_RGB_COLORS);
+        } else {
+            // Cuadro renderizado mas pequeno y estirado: es lo que mantiene el
+            // giro fluido en equipos lentos.
+            SetStretchBltMode(dc, HALFTONE);
+            StretchDIBits(dc, 0, 0, m_width, m_height, 0, 0, m_frame.width, m_frame.height,
+                          m_frame.pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
+        }
     } else {
         RECT client;
         GetClientRect(m_hwnd, &client);
@@ -466,8 +599,9 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_TIMER:
             if (wparam == kQualityTimer) {
                 KillTimer(m_hwnd, kQualityTimer);
-                if (!m_orbiting && !m_panning && m_frameSupersample < 3 && !m_mesh.empty()) {
-                    render(3);
+                if (!m_orbiting && !m_panning && !m_mesh.empty() &&
+                    (m_frameInteractive || m_frameScale < 1.0)) {
+                    render(false);
                     invalidate();
                 }
             }

@@ -31,7 +31,14 @@ void promptOpen(HWND frame) {
     OPENFILENAMEW dialog = {};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = frame;
-    dialog.lpstrFilter = L"Archivos STEP (*.stp;*.step)\0*.stp;*.step\0Todos (*.*)\0*.*\0";
+    dialog.lpstrFilter =
+        L"Modelos 3D y planos\0*.stp;*.step;*.igs;*.iges;*.dxf;*.stl;*.obj;*.ply;*.dwg;*.prt;"
+        L"*.sldprt;*.sldasm;*.ipt;*.iam;*.catpart\0"
+        L"STEP (*.stp;*.step)\0*.stp;*.step\0"
+        L"IGES (*.igs;*.iges)\0*.igs;*.iges\0"
+        L"DXF (*.dxf)\0*.dxf\0"
+        L"Mallas (*.stl;*.obj;*.ply)\0*.stl;*.obj;*.ply\0"
+        L"Todos (*.*)\0*.*\0";
     dialog.lpstrFile = path;
     dialog.nMaxFile = MAX_PATH;
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
