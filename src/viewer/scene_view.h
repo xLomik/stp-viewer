@@ -38,6 +38,8 @@ public:
     // El panel de vista previa impone los colores del tema del Explorador.
     void setHostColors(COLORREF background, COLORREF text);
     void setCompact(bool compact);
+    // Tope de tiempo del mallado, en milisegundos (0 = sin tope).
+    void setBudget(int milliseconds) { m_budgetMs = milliseconds; }
 
     bool hasModel() const { return !m_mesh.empty(); }
 
@@ -70,6 +72,8 @@ private:
     bool m_frameValid = false;
     bool m_compact = false;
     bool m_hostColors = false;
+    bool m_truncated = false;
+    int m_budgetMs = 0;
     COLORREF m_textColor = RGB(226, 232, 238);
     COLORREF m_dimColor = RGB(138, 152, 166);
 

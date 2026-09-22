@@ -108,6 +108,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
 
     stp::SceneView view;
     g_view = &view;
+    view.setBudget(120000);
     if (!view.create(instance, frame, client)) return 1;
 
     ShowWindow(frame, showCmd);

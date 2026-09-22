@@ -192,13 +192,15 @@ void SceneView::loadMemory(std::string bytes, const std::wstring& title) {
 
     auto channel = m_channel;
     HWND hwnd = m_hwnd;
-    std::thread([channel, hwnd, generation, title, data = std::move(bytes)]() {
+    const int budgetMs = m_budgetMs;
+    std::thread([channel, hwnd, generation, title, budgetMs, data = std::move(bytes)]() {
         auto result = std::make_unique<SceneLoadResult>();
         result->generation = generation;
         result->title = title;
         std::string error;
+        // Tope de tiempo: mas vale una malla incompleta que una ventana colgada.
         if (!loadStepMemory(data.data(), data.size(), &result->mesh, &error, &result->stats,
-                            0.0008)) {
+                            0.0008, budgetMs)) {
             result->error = utf8ToWide(error);
         }
 
@@ -225,6 +227,7 @@ void SceneView::applyModel(SceneLoadResult* result) {
     m_stats = result->stats;
     m_title = result->title;
     m_message.clear();
+    m_truncated = result->stats.truncated;
     fitView();
     requestQualityPass();
 }
@@ -312,6 +315,13 @@ void SceneView::drawOverlay(HDC dc) {
         RECT box = {pad, pad, m_width - pad, pad + scaled(20)};
         SetTextColor(dc, m_textColor);
         DrawTextW(dc, line, -1, &box, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        if (m_truncated) {
+            RECT warn = {pad, pad + scaled(18), m_width - pad, pad + scaled(36)};
+            SetTextColor(dc, RGB(226, 170, 90));
+            DrawTextW(dc, L"Modelo muy grande: se muestra solo una parte", -1, &warn,
+                      DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
 
         RECT help = {pad, m_height - pad - scaled(18), m_width - pad, m_height - pad};
         SetTextColor(dc, m_dimColor);

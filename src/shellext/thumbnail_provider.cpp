@@ -23,8 +23,12 @@ const IID kIID_IThumbnailProvider = {
 const IID kIID_IInitializeWithStream = {
     0xB824B49D, 0x22AC, 0x4161, {0xAC, 0x8A, 0x99, 0x16, 0xE8, 0xFA, 0x3F, 0x7F}};
 
-// Explorer's thumbnail host gives a provider a limited time budget, so very
-// large files get a coarser mesh instead of a timeout.
+// El Explorador espera la miniatura de forma sincrona: un archivo enorme no
+// puede tardar minutos. Los archivos grandes se mallan mas grueso y, pasado el
+// plazo, se dibuja lo que haya.
+constexpr size_t kMaxThumbnailBytes = 64u * 1024 * 1024;
+constexpr int kThumbnailBudgetMs = 6000;
+
 double qualityForSize(size_t bytes) {
     if (bytes > 40u * 1024 * 1024) return 0.006;
     if (bytes > 8u * 1024 * 1024) return 0.004;
@@ -64,7 +68,7 @@ public:
         STATSTG stat = {};
         ULONGLONG size = 0;
         if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME))) size = stat.cbSize.QuadPart;
-        if (size > 512ull * 1024 * 1024) return E_FAIL;
+        if (size > kMaxThumbnailBytes) return E_FAIL;  // el Explorador usa el icono
 
         std::string buffer;
         if (size > 0) buffer.reserve(static_cast<size_t>(size));
@@ -76,7 +80,7 @@ public:
             if (FAILED(hr)) return hr;
             if (got == 0) break;
             buffer.append(chunk, got);
-            if (buffer.size() > 512ull * 1024 * 1024) return E_FAIL;
+            if (buffer.size() > kMaxThumbnailBytes) return E_FAIL;
         }
         if (buffer.empty()) return E_FAIL;
         m_data.swap(buffer);
@@ -107,7 +111,8 @@ private:
 HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP* out) {
     stp::Mesh mesh;
     std::string error;
-    if (!stp::loadStepMemory(data, length, &mesh, &error, nullptr, qualityForSize(length))) {
+    if (!stp::loadStepMemory(data, length, &mesh, &error, nullptr, qualityForSize(length),
+                             kThumbnailBudgetMs)) {
         return E_FAIL;
     }
     if (mesh.empty() || !mesh.bounds.valid()) return E_FAIL;

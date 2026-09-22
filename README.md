@@ -132,6 +132,19 @@ src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
   toro), que son la mayoria en piezas mecanicas, si se mallan exactas.
 - No se leen colores ni materiales del archivo: todo se dibuja en gris acero.
 - Archivos comprimidos `.stpz` se registran pero aun no se descomprimen.
+- Hay topes de trabajo para que ninguna pieza pueda bloquear al Explorador: la
+  miniatura se rinde a los 6 s y el panel a los 20 s, dibujando lo que se haya
+  mallado; los archivos de mas de 64 MB no generan miniatura; y una cara con
+  miles de agujeros deja de perforar cuando el contorno unido pasa de 12000
+  puntos. En piezas normales ninguno de esos topes se roza.
+
+## Rendimiento
+
+El mallado esta acotado por diseno, porque el Explorador llama a estas
+extensiones de forma sincrona y un archivo lento se nota como una carpeta que
+no termina de abrir. Medido en este repositorio con una placa de 1600 agujeros
+(8,3 MB): 2 min 42 s antes de acotar el puenteo de agujeros, 3,7 s ahora. Una
+placa de 400 agujeros tarda 0,9 s y un soporte normal 0,3 s.
 
 ## Pruebas
 

@@ -17,17 +17,21 @@ struct LoadStats {
     int facesFailed = 0;
     std::size_t triangles = 0;
     double deflection = 0.0;
+    bool truncated = false;  // se acabo el tiempo antes de terminar
 };
 
 // quality is the chord deflection expressed as a fraction of the model's
 // bounding-box diagonal. 0.002 looks good for thumbnails, 0.0008 for the viewer.
+// budgetMs limits the time spent meshing; 0 means no limit. When the budget runs
+// out the mesh built so far is returned and stats.truncated is set, so a huge or
+// pathological file can never hang the caller.
 bool buildMesh(const StepFile& file, Mesh* mesh, double quality, std::string* error,
-               LoadStats* stats = nullptr);
+               LoadStats* stats = nullptr, int budgetMs = 0);
 
 bool loadStepFile(const std::string& path, Mesh* mesh, std::string* error,
-                  LoadStats* stats = nullptr, double quality = 0.0015);
+                  LoadStats* stats = nullptr, double quality = 0.0015, int budgetMs = 0);
 
 bool loadStepMemory(const char* data, std::size_t len, Mesh* mesh, std::string* error,
-                    LoadStats* stats = nullptr, double quality = 0.0015);
+                    LoadStats* stats = nullptr, double quality = 0.0015, int budgetMs = 0);
 
 }  // namespace stp

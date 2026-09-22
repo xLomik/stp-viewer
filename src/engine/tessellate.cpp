@@ -250,18 +250,67 @@ bool mergeLoops(const std::vector<std::vector<Vec2>>& loopsIn, std::vector<Vec2>
         return ma > mb;
     });
 
+    // Presupuesto de trabajo para el puenteo. Comprobar la visibilidad de todos
+    // los pares es cubico: una cara con cientos de agujeros tardaba minutos y
+    // dejaba colgado al Explorador. Se reparte el presupuesto entre los agujeros
+    // que quedan, de modo que el coste total esta acotado siempre.
+    std::size_t opsLeft = 60000000;
+    std::size_t holesLeft = order.size();
+    std::size_t holePointTotal = 0;
+    for (std::size_t i = 1; i < loops.size(); ++i) holePointTotal += loops[i].size();
+
+    // El recorte de orejas es cuadratico en el numero de puntos del poligono ya
+    // unido, asi que tampoco puede crecer sin limite.
+    const std::size_t maxMergedPoints = 12000;
+
     std::vector<bool> merged(loops.size(), false);
     for (std::size_t h : order) {
+        if (poly.size() > maxMergedPoints || opsLeft == 0) break;
         const std::vector<int>& hole = loopIdx[h];
         int bestPoly = -1, bestHole = -1;
-        double bestDist = 1e300;
 
+        const std::size_t checkCost = poly.size() + holePointTotal + 1;
+        const std::size_t affordable = opsLeft / (checkCost * std::max<std::size_t>(1, holesLeft));
+        const std::size_t maxCandidates =
+            std::max<std::size_t>(1, std::min<std::size_t>(24, affordable));
+        --holesLeft;
+
+        // Fase barata: los pares mas cortos. Fase cara: solo sobre esos se mira
+        // si el puente cruza algun borde.
+        struct Candidate {
+            double distance;
+            int holeIndex;
+            int polyIndex;
+        };
+        std::vector<Candidate> candidates;
+        candidates.reserve(hole.size() * std::min<std::size_t>(poly.size(), 64));
+        const std::size_t maxPairs = 200000;
+        const std::size_t total = hole.size() * poly.size();
+        const std::size_t stride = total > maxPairs ? (total / maxPairs) + 1 : 1;
+
+        std::size_t counter = 0;
         for (std::size_t hi = 0; hi < hole.size(); ++hi) {
             for (std::size_t pi = 0; pi < poly.size(); ++pi) {
+                if (stride > 1 && (counter++ % stride) != 0) continue;
+                candidates.push_back({length(pts[hole[hi]] - pts[poly[pi]]),
+                                      static_cast<int>(hi), static_cast<int>(pi)});
+            }
+        }
+        if (candidates.empty()) continue;
+        const std::size_t keep = std::min(maxCandidates, candidates.size());
+        std::partial_sort(candidates.begin(), candidates.begin() + keep, candidates.end(),
+                          [](const Candidate& a, const Candidate& b) {
+                              return a.distance < b.distance;
+                          });
+        candidates.resize(keep);
+
+        for (const Candidate& candidate : candidates) {
+            opsLeft = opsLeft > checkCost ? opsLeft - checkCost : 0;
+            {
+                const std::size_t hi = static_cast<std::size_t>(candidate.holeIndex);
+                const std::size_t pi = static_cast<std::size_t>(candidate.polyIndex);
                 const Vec2& hp = pts[hole[hi]];
                 const Vec2& pp = pts[poly[pi]];
-                const double d = length(hp - pp);
-                if (d >= bestDist) continue;
 
                 bool blocked = false;
                 for (std::size_t k = 0; k < poly.size() && !blocked; ++k) {
@@ -294,12 +343,13 @@ bool mergeLoops(const std::vector<std::vector<Vec2>>& loopsIn, std::vector<Vec2>
                 }
                 if (insideHole) continue;
 
-                bestDist = d;
                 bestPoly = static_cast<int>(pi);
                 bestHole = static_cast<int>(hi);
             }
+            if (bestPoly >= 0) break;
         }
-        if (bestPoly < 0 || bestHole < 0) continue;  // unbridgeable hole: ignore it
+        if (bestPoly < 0 || bestHole < 0) continue;  // agujero sin puente: se ignora
+        holePointTotal -= loops[h].size();
 
         std::vector<int> spliced;
         spliced.reserve(poly.size() + hole.size() + 2);
@@ -351,11 +401,16 @@ bool triangulateGrid(const std::vector<Vec2>& polygon, double uStep, double vSte
     const double uSpan = std::max(u1 - u0, 1e-12);
     const double vSpan = std::max(v1 - v0, 1e-12);
 
-    const int maxCells = 400;
+    const int maxPerAxis = 400;
+    const long maxTotalCells = 40000;  // cota dura de trabajo por cara
     int nu = uStep > 0 ? static_cast<int>(std::ceil(uSpan / uStep)) : 1;
     int nv = vStep > 0 ? static_cast<int>(std::ceil(vSpan / vStep)) : 1;
-    nu = std::max(1, std::min(maxCells, nu));
-    nv = std::max(1, std::min(maxCells, nv));
+    nu = std::max(1, std::min(maxPerAxis, nu));
+    nv = std::max(1, std::min(maxPerAxis, nv));
+    while (static_cast<long>(nu) * nv > maxTotalCells) {
+        if (nu >= nv) nu = std::max(1, nu / 2);
+        else nv = std::max(1, nv / 2);
+    }
     const double du = uSpan / nu;
     const double dv = vSpan / nv;
 

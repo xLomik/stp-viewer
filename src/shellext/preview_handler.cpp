@@ -121,6 +121,9 @@ public:
         if (!m_view.create(g_shellExtModule, m_parent, local)) return E_FAIL;
 
         m_view.setCompact(true);
+        // prevhost.exe es un proceso aparte, pero el panel no puede quedarse
+        // cargando para siempre con un archivo enorme.
+        m_view.setBudget(20000);
         if (m_hasVisuals) m_view.setHostColors(m_background, m_textColor);
         m_view.loadMemory(std::move(m_data), m_title);
         m_data.clear();

@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "budget.h"
 #include "surfaces.h"
 #include "tessellate.h"
 
@@ -73,8 +74,8 @@ namespace {
 
 class Builder {
 public:
-    Builder(const StepFile& file, Mesh* mesh, double quality)
-        : F(file), M(*mesh), m_quality(quality > 0 ? quality : 0.0015) {}
+    Builder(const StepFile& file, Mesh* mesh, double quality, int budgetMs)
+        : F(file), M(*mesh), m_quality(quality > 0 ? quality : 0.0015), m_budget(budgetMs) {}
 
     bool run(std::string* error, LoadStats* stats);
 
@@ -90,6 +91,17 @@ private:
     std::unordered_map<int, std::vector<Vec3>> m_edgeCache;
     std::unordered_set<int> m_edgeEmitted;
     int m_instances = 0;
+    Budget m_budget;
+    bool m_truncated = false;
+
+    // Se consulta una vez por cara y por instancia: basta para cortar a tiempo
+    // sin encarecer los bucles internos.
+    bool outOfTime() {
+        if (m_truncated) return true;
+        if (!m_budget.expired()) return false;
+        m_truncated = true;
+        return true;
+    }
 
     const Entity* res(const Value& v) const { return F.get(v); }
 
@@ -256,7 +268,7 @@ void Builder::collectInstances() {
 
     std::vector<std::pair<int, Mat4>> pending = stack;
     int guard = 0;
-    while (!pending.empty() && guard++ < kMaxInstances) {
+    while (!pending.empty() && guard++ < kMaxInstances && !outOfTime()) {
         const auto cur = pending.back();
         pending.pop_back();
         const Entity* rep = F.get(cur.first);
@@ -295,7 +307,7 @@ void Builder::emitRepresentation(const Entity* rep, const Mat4& xf, int depth) {
 }
 
 void Builder::emitItem(const Entity* item, const Mat4& xf, int depth) {
-    if (!item || depth > kMaxDepth) return;
+    if (!item || depth > kMaxDepth || outOfTime()) return;
 
     if (item->is("MANIFOLD_SOLID_BREP") || item->is("FACETED_BREP") || item->is("BREP_WITH_VOIDS")) {
         const std::vector<Value>& p = item->params();
@@ -365,6 +377,7 @@ void Builder::buildShell(const Entity* shell, const Mat4& xf) {
     const std::vector<Value>& p = shell->params();
     if (p.size() < 2 || !p[1].isList()) return;
     for (const Value& v : p[1].items) {
+        if (outOfTime()) return;
         const Entity* face = res(v);
         if (face) buildFace(face, xf);
     }
@@ -668,6 +681,17 @@ bool Builder::loopPoints(const Entity* loop, std::vector<Vec3>* pts, const Mat4&
         }
     }
     if (pts->size() > 2 && distance(pts->front(), pts->back()) <= m_weldTol) pts->pop_back();
+
+    // Un contorno con decenas de miles de puntos dispara el coste del recorte;
+    // se diezma de forma uniforme, que a esa densidad no se nota.
+    const std::size_t maxLoopPoints = 6000;
+    if (pts->size() > maxLoopPoints) {
+        const std::size_t stride = pts->size() / maxLoopPoints + 1;
+        std::vector<Vec3> reduced;
+        reduced.reserve(pts->size() / stride + 2);
+        for (std::size_t i = 0; i < pts->size(); i += stride) reduced.push_back((*pts)[i]);
+        pts->swap(reduced);
+    }
     return pts->size() >= 3;
 }
 
@@ -971,6 +995,7 @@ void Builder::addTessellated(const Surface& surf, const std::vector<std::vector<
 }
 
 void Builder::buildFace(const Entity* face, const Mat4& xf) {
+    if (outOfTime()) return;
     const std::vector<Value>& p = face->params();
     if (p.size() < 3 || !p[1].isList()) return;
 
@@ -1041,6 +1066,7 @@ bool Builder::run(std::string* error, LoadStats* stats) {
         stats->facesFailed = M.facesFailed;
         stats->triangles = M.triangleCount();
         stats->deflection = m_tol;
+        stats->truncated = m_truncated;
     }
     return true;
 }
@@ -1048,23 +1074,23 @@ bool Builder::run(std::string* error, LoadStats* stats) {
 }  // namespace
 
 bool buildMesh(const StepFile& file, Mesh* mesh, double quality, std::string* error,
-               LoadStats* stats) {
-    Builder builder(file, mesh, quality);
+               LoadStats* stats, int budgetMs) {
+    Builder builder(file, mesh, quality, budgetMs);
     return builder.run(error, stats);
 }
 
 bool loadStepFile(const std::string& path, Mesh* mesh, std::string* error, LoadStats* stats,
-                  double quality) {
+                  double quality, int budgetMs) {
     StepFile file;
     if (!file.parseFile(path, error)) return false;
-    return buildMesh(file, mesh, quality, error, stats);
+    return buildMesh(file, mesh, quality, error, stats, budgetMs);
 }
 
 bool loadStepMemory(const char* data, std::size_t len, Mesh* mesh, std::string* error,
-                    LoadStats* stats, double quality) {
+                    LoadStats* stats, double quality, int budgetMs) {
     StepFile file;
     if (!file.parse(data, len, error)) return false;
-    return buildMesh(file, mesh, quality, error, stats);
+    return buildMesh(file, mesh, quality, error, stats, budgetMs);
 }
 
 }  // namespace stp
