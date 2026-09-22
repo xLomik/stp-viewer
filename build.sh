@@ -46,5 +46,5 @@ $CXX_WIN $FLAGS -o dist/previewtest.exe src/tools/previewtest.cpp \
 
 $STRIP dist/StepShellExt.dll dist/stpviewer.exe dist/thumbtest.exe dist/previewtest.exe || true
 
-cp -f install/instalar.bat install/desinstalar.bat dist/ 2>/dev/null || true
+cp -f install/instalar.bat install/desinstalar.bat install/diagnostico.bat dist/ 2>/dev/null || true
 ls -la dist

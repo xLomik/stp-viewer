@@ -27,10 +27,33 @@ vista previa si necesita una clave de maquina (`PreviewHandlers`), asi que el
 instalador pide permiso de administrador una sola vez; si lo rechazas, las
 miniaturas siguen funcionando y el panel no.
 
-Para quitarlo: `desinstalar.bat`.
+Para quitarlo: `desinstalar.bat`. Para revisar que quedo mal: `diagnostico.bat`.
 
 Windows mostrara un aviso de SmartScreen la primera vez porque los ejecutables
 no estan firmados.
+
+## Si el panel no muestra nada
+
+Ejecuta `diagnostico.bat`: revisa el registro y dice exactamente que falta. Las
+causas habituales, en orden:
+
+1. **El panel esta cerrado.** Ver > Panel de vista previa (`Alt+P`); en Windows
+   11, Ver > Mostrar > Panel de vista previa.
+2. **Falta el permiso de administrador.** Windows solo carga manejadores
+   listados en `HKLM\...\PreviewHandlers`. Vuelve a ejecutar `instalar.bat` y
+   acepta el aviso.
+3. **Un CAD reclamo la extension.** Si SolidWorks, Inventor o similar registro
+   un tipo de archivo para `.stp`, ese tipo manda sobre la extension. El
+   instalador tambien escribe ahi, pero si instalaste el CAD *despues*, vuelve a
+   ejecutar `instalar.bat`.
+4. **El Explorador tiene la DLL vieja en memoria.** `taskkill /f /im
+   prevhost.exe` y cierra y abre el Explorador.
+5. **Archivo en OneDrive sin descargar**, o en una unidad de red lenta.
+
+Para las miniaturas, ademas: Opciones del Explorador > Ver > desmarca "Mostrar
+siempre iconos, nunca miniaturas", y borra la cache
+(`%LOCALAPPDATA%\Microsoft\Windows\Explorer\thumbcache_*.db`), cosa que
+`instalar.bat` ya hace.
 
 ## Uso del visor y del panel
 

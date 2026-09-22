@@ -3,6 +3,7 @@
 
 #include <new>
 #include <string>
+#include <vector>
 
 #include "shellext.h"
 
@@ -76,6 +77,39 @@ LONG setValue(HKEY root, const std::wstring& subkey, const wchar_t* name,
 
 std::wstring classesRoot() { return L"Software\\Classes\\"; }
 
+std::wstring readString(HKEY root, const std::wstring& subkey, const wchar_t* name) {
+    wchar_t buffer[512] = {};
+    DWORD size = sizeof(buffer);
+    DWORD type = 0;
+    if (RegGetValueW(root, subkey.c_str(), name, RRF_RT_REG_SZ, &type, buffer, &size) !=
+        ERROR_SUCCESS) {
+        return std::wstring();
+    }
+    return std::wstring(buffer);
+}
+
+// Cuando un CAD ya reclamo la extension, su ProgID manda sobre la clave de la
+// extension, asi que hay que colgar las mismas asociaciones ahi tambien.
+std::vector<std::wstring> progIdsFor(const wchar_t* ext) {
+    std::vector<std::wstring> ids;
+    auto push = [&ids](const std::wstring& id) {
+        if (id.empty() || id[0] == L'{') return;
+        for (const std::wstring& existing : ids) {
+            if (_wcsicmp(existing.c_str(), id.c_str()) == 0) return;
+        }
+        ids.push_back(id);
+    };
+
+    push(readString(HKEY_CLASSES_ROOT, ext, nullptr));
+    push(readString(HKEY_CURRENT_USER, classesRoot() + ext, nullptr));
+    push(readString(HKEY_CURRENT_USER,
+                    std::wstring(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\"
+                                 L"FileExts\\") +
+                        ext + L"\\UserChoice",
+                    L"ProgId"));
+    return ids;
+}
+
 }  // namespace
 
 STDAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void** ppv) {
@@ -141,6 +175,13 @@ HRESULT RegisterShellExtensions(HMODULE module, bool perUser) {
         // Sin PerceivedType el panel no ofrece vista previa para extensiones
         // que ningun programa reclama.
         setValue(root, base + ext, L"PerceivedType", L"document");
+
+        for (const std::wstring& progId : progIdsFor(ext)) {
+            setValue(root, base + progId + L"\\ShellEx\\" + kThumbnailProviderIid, nullptr,
+                     kThumbnailClsid);
+            setValue(root, base + progId + L"\\ShellEx\\" + kPreviewHandlerIid, nullptr,
+                     kPreviewClsid);
+        }
     }
 
     // Windows solo acepta manejadores listados aqui. La lista de maquina pide
@@ -175,6 +216,10 @@ HRESULT UnregisterShellExtensions(bool perUser) {
         RegDeleteTreeW(root, (base + L"SystemFileAssociations\\" + ext + L"\\ShellEx\\" +
                               kPreviewHandlerIid)
                                  .c_str());
+        for (const std::wstring& progId : progIdsFor(ext)) {
+            RegDeleteTreeW(root, (base + progId + L"\\ShellEx\\" + kThumbnailProviderIid).c_str());
+            RegDeleteTreeW(root, (base + progId + L"\\ShellEx\\" + kPreviewHandlerIid).c_str());
+        }
     }
 
     for (HKEY hive : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
