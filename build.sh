@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Compilacion cruzada desde Linux hacia Windows x64 con mingw-w64.
+#   ./build.sh            -> todo (DLL, visor, herramientas)
+#   ./build.sh native     -> solo la herramienta de linea de comandos para Linux
+set -euo pipefail
+
+cd "$(dirname "$0")"
+mkdir -p build dist
+
+CXX_WIN=${CXX_WIN:-x86_64-w64-mingw32-g++}
+WINDRES=${WINDRES:-x86_64-w64-mingw32-windres}
+STRIP=${STRIP:-x86_64-w64-mingw32-strip}
+
+ENGINE="src/engine/step_file.cpp src/engine/step_model.cpp src/engine/surfaces.cpp src/engine/tessellate.cpp src/render/renderer.cpp"
+FLAGS="-std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter"
+STATIC="-static -static-libgcc -static-libstdc++"
+
+if [ "${1:-all}" = "native" ]; then
+    g++ $FLAGS $ENGINE src/tools/steprender.cpp -o build/steprender
+    echo "build/steprender"
+    exit 0
+fi
+
+# Herramienta nativa: util para revisar el mallado sin Windows de por medio.
+g++ $FLAGS $ENGINE src/tools/steprender.cpp -o build/steprender
+
+# Manejador de miniaturas del Explorador (DLL COM).
+$CXX_WIN $FLAGS -shared -o dist/StepThumbnail.dll \
+    src/thumbnailer/dllmain.cpp src/thumbnailer/provider.cpp $ENGINE \
+    src/thumbnailer/thumbnailer.def \
+    $STATIC -lole32 -loleaut32 -luuid -lshlwapi -lshell32 -ladvapi32 -lgdi32
+
+# Visor 3D.
+$WINDRES src/viewer/viewer.rc -O coff -o build/viewer.res
+$CXX_WIN $FLAGS -municode -o dist/stpviewer.exe \
+    src/viewer/main.cpp $ENGINE build/viewer.res \
+    -mwindows $STATIC -lcomctl32 -lshlwapi -lole32 -loleaut32 -luuid -lgdi32 -luser32 \
+    -lshell32 -lcomdlg32 -ladvapi32
+
+# Banco de pruebas del manejador COM (opcional, no se instala).
+$CXX_WIN $FLAGS -o dist/thumbtest.exe src/tools/thumbtest.cpp \
+    $STATIC -lole32 -loleaut32 -luuid -lshlwapi -lgdi32 -luser32
+
+$STRIP dist/StepThumbnail.dll dist/stpviewer.exe dist/thumbtest.exe || true
+
+cp -f install/instalar.bat install/desinstalar.bat dist/ 2>/dev/null || true
+ls -la dist
