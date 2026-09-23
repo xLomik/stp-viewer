@@ -54,6 +54,15 @@ public:
     void showMessage(const std::wstring& text);
     std::wstring describe(const Mark& mark) const;
 
+    void undo();
+    void redo();
+    void deleteSelected();
+    void cycleColor();
+    std::uint32_t color() const { return m_tool == Tool::Highlight ? m_highlight : m_color; }
+    int hiddenCount(const Camera& camera) const;  // marcas de otras vistas
+    int selected() const { return m_selected; }
+    void select(int id);
+
 private:
     struct Value {
         bool ok = false;
@@ -66,6 +75,33 @@ private:
     };
 
     bool isMeasureTool() const;
+    bool isSketchTool() const;
+    void pushUndo();
+    Vec3 unproject(int x, int y, const Vec3& through) const;
+    int viewForSketch();
+    void finishSketch();
+    void openNoteEditor(int markId);
+    void closeNoteEditor(bool commit);
+    int hitTest(int x, int y) const;
+    void drawSketch(void* graphics, const Mark& mark, const Camera& camera, int width, int height,
+                    double scale) const;
+    void drawNote(void* graphics, const Mark& mark, const Camera& camera, int width, int height,
+                  double scale) const;
+    bool screenBounds(const Mark& mark, const Camera& camera, int width, int height, RECT* out) const;
+    static LRESULT CALLBACK editProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
+
+    std::uint32_t m_color = kMarkRed;
+    std::uint32_t m_highlight = kHighlightYellow;
+    std::vector<POINT> m_stroke;  // trazo o forma en curso, en pixeles
+    bool m_sketching = false;
+    bool m_noteAnchored = false;
+    SnapResult m_noteAnchor;
+    int m_selected = -1;
+    POINT m_downAt = {0, 0};
+    std::vector<MarkupDocument> m_undo, m_redo;
+    HWND m_edit = nullptr;
+    WNDPROC m_editDefault = nullptr;
+    int m_editMark = -1;
     SnapResult snapAt(int x, int y) const;
     void addMark(Mark mark);
     void clickMeasure(const SnapResult& snap);

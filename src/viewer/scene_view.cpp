@@ -511,13 +511,17 @@ void SceneView::drawOverlay(HDC dc) {
         if (m_plan2d) {
             hint = m_compact ? L"Arrastrar: mover   Rueda: zoom   F: encuadrar   M: medir"
                              : L"Arrastrar: mover   |   Rueda: zoom al cursor   |   "
-                               L"F o doble clic: encuadrar   |   7: ver en 3D   |   M: medir";
+                               L"F o doble clic: encuadrar   |   7: ver en 3D";
         } else {
             hint = m_compact ? L"Arrastrar: girar   Rueda: zoom   F: encuadrar   M: medir"
                              : L"Arrastrar: girar   |   Rueda: zoom   |   Boton derecho o medio: "
                                L"mover   |   F: encuadrar   |   1-6: vistas   |   W: alambre   |   "
-                               L"A: aristas   |   P: perspectiva   |   M: medir";
+                               L"A: aristas   |   P: perspectiva";
             if (!m_compact && m_planar.planar) hint += L"   |   D: plano 2D";
+        }
+        if (!m_compact && m_tools) {
+            hint += m_tools->editing() ? L"   |   M: medir   |   H U N R E C L: marcar   |   Ctrl+Z: deshacer"
+                                       : L"   |   M: medir";
         }
         if (m_tools && !m_tools->hint().empty()) {
             hint = m_tools->hint();
