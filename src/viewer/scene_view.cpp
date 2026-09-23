@@ -3,6 +3,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cctype>
 #include <memory>
 #include <mutex>
@@ -55,6 +56,47 @@ void ensureClass(HINSTANCE instance) {
     cls.hCursor = LoadCursor(nullptr, IDC_ARROW);
     cls.lpszClassName = kClassName;
     RegisterClassExW(&cls);
+}
+
+std::string narrowUtf8(const std::wstring& text) {
+    if (text.empty()) return std::string();
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(std::max(0, size)), '\0');
+    if (size > 0) WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), &out[0], size, nullptr, nullptr);
+    return out;
+}
+
+std::wstring markupPathOf(const std::wstring& model) { return model + L".marcas"; }
+
+// Tamano y fecha de modificacion (UTC, "AAAA-MM-DDTHH:MM:SS").
+bool fileStamp(const std::wstring& path, std::uint64_t* size, std::string* date) {
+    WIN32_FILE_ATTRIBUTE_DATA data = {};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) return false;
+    *size = (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+    SYSTEMTIME t = {};
+    FileTimeToSystemTime(&data.ftLastWriteTime, &t);
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%04u-%02u-%02uT%02u:%02u:%02u", t.wYear, t.wMonth, t.wDay, t.wHour,
+                  t.wMinute, t.wSecond);
+    *date = buffer;
+    return true;
+}
+
+// Escribe en <ruta>.tmp y lo cambia por el original: un corte a mitad de camino
+// deja el archivo anterior intacto.
+bool writeFileAtomically(const std::wstring& path, const std::string& bytes) {
+    const std::wstring temp = path + L".tmp";
+    HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
+                    written == bytes.size() && FlushFileBuffers(file);
+    CloseHandle(file);
+    if (!ok || !MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temp.c_str());
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -203,6 +245,8 @@ void SceneView::invalidate() {
 }
 
 void SceneView::loadFile(const std::wstring& path) {
+    saveMarks(nullptr);
+    m_path = path;
     std::string bytes;
     if (!readFileBytes(path, &bytes)) {
         m_mesh = Mesh();
@@ -319,6 +363,7 @@ void SceneView::applyModel(SceneLoadResult* result) {
     updateStyle();
     fitView();
     requestQualityPass();
+    loadMarks();
 }
 
 void SceneView::fitView() {
@@ -624,6 +669,48 @@ void SceneView::drawScene(HDC dc) {
     }
 
     drawOverlay(dc);
+}
+
+void SceneView::loadMarks() {
+    if (!m_tools || !m_tools->editing() || m_path.empty()) return;
+    std::string text;
+    if (!readFileBytes(markupPathOf(m_path), &text)) return;  // sin marcas todavia
+
+    MarkupDocument doc;
+    const MarkupParseReport report = parseMarkup(text, &doc);
+    if (!report.recognized) {
+        m_tools->showMessage(L"El archivo de marcas no se reconoce; se reemplaza solo si marcas algo", 10000);
+        return;
+    }
+    m_tools->setDocument(doc);
+    std::uint64_t size = 0;
+    std::string date;
+    if (report.badLines > 0 || report.newerVersion) {
+        m_tools->showMessage(L"Algunas marcas no se pudieron leer; el archivo no se toca hasta que marques algo", 10000);
+    } else if (fileStamp(m_path, &size, &date) && modelChanged(doc, size, date)) {
+        m_tools->showMessage(L"El archivo cambi\u00F3 desde que se marc\u00F3", 10000);
+    }
+}
+
+bool SceneView::saveMarks(std::wstring* message) {
+    if (!m_tools || !m_tools->editing() || m_path.empty() || !m_tools->dirty()) return true;
+    const std::wstring target = markupPathOf(m_path);
+    MarkupDocument doc = m_tools->document();
+    fileStamp(m_path, &doc.modelSize, &doc.modelDate);
+    doc.modelName = narrowUtf8(fileNameOf(m_path));
+
+    bool ok = true;
+    if (doc.marks.empty()) {
+        ok = DeleteFileW(target.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND;
+    } else {
+        ok = writeFileAtomically(target, serializeMarkup(doc));
+    }
+    if (ok) {
+        m_tools->markSaved();
+    } else if (message) {
+        *message = L"No se pudieron guardar las marcas en " + target;
+    }
+    return ok;
 }
 
 void SceneView::enableTools(bool editing) {

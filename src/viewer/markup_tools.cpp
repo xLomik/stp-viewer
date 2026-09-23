@@ -14,7 +14,6 @@ namespace stp {
 namespace {
 
 constexpr UINT_PTR kMessageTimer = 7;
-constexpr ULONGLONG kMessageMs = 4000;
 
 constexpr UINT kNoteCommit = WM_APP + 21;
 constexpr std::size_t kUndoDepth = 100;
@@ -133,10 +132,10 @@ void MarkupTools::setTool(Tool tool) {
 
 void MarkupTools::clear() { setDocument(MarkupDocument()); }
 
-void MarkupTools::showMessage(const std::wstring& text) {
+void MarkupTools::showMessage(const std::wstring& text, unsigned milliseconds) {
     m_message = text;
-    m_messageUntil = GetTickCount64() + kMessageMs;
-    SetTimer(m_host->markupWindow(), kMessageTimer, static_cast<UINT>(kMessageMs + 50), nullptr);
+    m_messageUntil = GetTickCount64() + milliseconds;
+    SetTimer(m_host->markupWindow(), kMessageTimer, milliseconds + 50, nullptr);
     m_host->markupRedraw();
 }
 
@@ -774,8 +773,8 @@ MarkupTools::Value MarkupTools::evaluate(const Mark& mark) const {
             const DistanceResult d = measureDistance(mark.points[0], mark.points[1], plane);
             v.ok = true;
             v.label = widen(formatLength(d.total, unit));
-            v.detail = L"ΔX " + widen(formatNumber(d.delta.x, 3)) + L"   ΔY " + widen(formatNumber(d.delta.y, 3));
-            if (!plane) v.detail += L"   ΔZ " + widen(formatNumber(d.delta.z, 3));
+            v.detail = L"\u0394X " + widen(formatNumber(d.delta.x, 3)) + L"   \u0394Y " + widen(formatNumber(d.delta.y, 3));
+            if (!plane) v.detail += L"   \u0394Z " + widen(formatNumber(d.delta.z, 3));
             break;
         }
         case MarkKind::Radius: {
@@ -791,7 +790,7 @@ MarkupTools::Value MarkupTools::evaluate(const Mark& mark) const {
             v.ok = true;
             v.center = r.center;
             v.label = L"R " + widen(formatLength(r.radius, unit));
-            v.detail = L"Ø " + widen(formatLength(2 * r.radius, unit));
+            v.detail = L"\u00D8 " + widen(formatLength(2 * r.radius, unit));
             break;
         }
         case MarkKind::Angle: {
@@ -1036,7 +1035,7 @@ void MarkupTools::draw(HDC dc, const Camera& camera, int width, int height, doub
     if (hidden > 0) {
         drawLabel(&g, width / 2.0, 64 * dpi,
                   std::to_wstring(hidden) + (hidden == 1 ? L" marca en otra vista" : L" marcas en otras vistas") +
-                      L" — F2 para verlas",
+                      L" \u2014 F2 para verlas",
                   L"", kMarkBlue, 1.0);
     }
 

@@ -51,7 +51,7 @@ public:
     void clear();
     bool dirty() const { return m_dirty; }
     void markSaved() { m_dirty = false; }
-    void showMessage(const std::wstring& text);
+    void showMessage(const std::wstring& text, unsigned milliseconds = 4000);
     std::wstring describe(const Mark& mark) const;
 
     void undo();

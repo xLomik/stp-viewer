@@ -48,6 +48,10 @@ public:
     // Herramientas de medir y marcar. editing = false en el panel: solo medir.
     void enableTools(bool editing);
     MarkupTools* tools() { return m_tools.get(); }
+    // Guarda <modelo>.marcas si hay cambios. false (y un mensaje) si no se pudo.
+    bool saveMarks(std::wstring* message);
+    const std::wstring& path() const { return m_path; }
+    const Camera& camera() const { return m_camera; }
     bool toolActive() const { return m_tools && m_tools->active(); }
     void setMarkupListener(std::function<void()> listener) { m_markupListener = std::move(listener); }
 
@@ -125,6 +129,8 @@ private:
     std::atomic<unsigned> m_generation{0};
     std::atomic<bool> m_loading{false};
 
+    void loadMarks();
+    std::wstring m_path;  // vacio en el panel: ahi no hay ruta
     std::unique_ptr<MarkupTools> m_tools;
     std::shared_ptr<PickIndex> m_pick;
     std::function<void()> m_markupListener;

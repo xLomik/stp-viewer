@@ -22,8 +22,16 @@ void openFile(HWND frame, const std::wstring& path) {
     if (!g_view) return;
     g_currentFile = path;
     SetWindowTextW(frame, (fileNameOf(path) + L" - stp-viewer").c_str());
+    std::wstring problem;
+    if (!g_view->saveMarks(&problem)) MessageBoxW(frame, problem.c_str(), L"stp-viewer", MB_ICONWARNING);
     g_view->loadFile(path);
     g_view->focus();
+}
+
+void updateTitle(HWND frame) {
+    if (!g_view || g_currentFile.empty()) return;
+    const bool dirty = g_view->tools() && g_view->tools()->dirty();
+    SetWindowTextW(frame, (fileNameOf(g_currentFile) + (dirty ? L" *" : L"") + L" - stp-viewer").c_str());
 }
 
 void promptOpen(HWND frame) {
@@ -69,6 +77,13 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_KEYDOWN:
+            if (wparam == 'S' && GetKeyState(VK_CONTROL) < 0 && g_view && g_view->tools()) {
+                std::wstring problem;
+                const bool saved = g_view->saveMarks(&problem);
+                g_view->tools()->showMessage(saved ? L"Marcas guardadas" : problem);
+                updateTitle(hwnd);
+                return 0;
+            }
             if (wparam == 'O' && GetKeyState(VK_CONTROL) < 0) {
                 promptOpen(hwnd);
                 return 0;
@@ -78,6 +93,16 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 return 0;
             }
             break;
+
+        case WM_CLOSE: {
+            std::wstring problem;
+            if (g_view && !g_view->saveMarks(&problem)) {
+                const std::wstring question = problem + L"\n\n\u00BFCerrar de todos modos?";
+                if (MessageBoxW(hwnd, question.c_str(), L"stp-viewer", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
+            }
+            DestroyWindow(hwnd);
+            return 0;
+        }
 
         case WM_DESTROY:
             PostQuitMessage(0);
@@ -117,6 +142,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     g_view = &view;
     view.setBudget(120000);
     view.enableTools(true);
+    view.setMarkupListener([frame]() { updateTitle(frame); });
     if (!view.create(instance, frame, client)) return 1;
 
     ShowWindow(frame, showCmd);
@@ -134,6 +160,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
         if (msg.message == WM_KEYDOWN && msg.hwnd == view.hwnd()) {
             // Ctrl+O y Escape los atiende el marco aunque el foco este en la vista.
             if ((msg.wParam == 'O' && GetKeyState(VK_CONTROL) < 0) ||
+                (msg.wParam == 'S' && GetKeyState(VK_CONTROL) < 0) ||
                 (msg.wParam == VK_ESCAPE && !view.toolActive())) {
                 SendMessageW(frame, WM_KEYDOWN, msg.wParam, msg.lParam);
                 continue;
