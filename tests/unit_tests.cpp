@@ -472,6 +472,117 @@ TEST(dxf_dimension_text_comes_from_its_block) {
     CHECK(t && t->text == "10");
 }
 
+// --- Elementos medibles ---------------------------------------------------------
+
+namespace {
+
+std::string headerSection(const Pairs& header) {
+    Pairs all = {{0, "SECTION"}, {2, "HEADER"}};
+    all.insert(all.end(), header.begin(), header.end());
+    all.push_back({0, "ENDSEC"});
+    return dxf(all);
+}
+
+}  // namespace
+
+TEST(features_dxf_circle_is_exact) {
+    const std::string text = entities({{0, "CIRCLE"}, {10, "10"}, {20, "20"}, {30, "0"}, {40, "5"}});
+    stp::Mesh mesh;
+    CHECK(loadDxfText(text, &mesh));
+    CHECK(mesh.features.circles.size() == 1);
+    CHECK(mesh.features.contours.size() == 1);
+    if (mesh.features.circles.size() != 1) return;
+    const stp::CircleFeature& c = mesh.features.circles[0];
+    CHECK_NEAR(c.radius, 5.0, 1e-12);
+    CHECK_NEAR(c.center.x, 10.0, 1e-12);
+    CHECK_NEAR(c.center.y, 20.0, 1e-12);
+    CHECK(c.full());
+    CHECK(mesh.units == stp::LengthUnit::Millimeter);  // DXF sin $INSUNITS: mm
+}
+
+TEST(features_dxf_arc_keeps_its_range) {
+    const std::string text = entities({{0, "ARC"}, {10, "0"}, {20, "0"}, {40, "4"},
+                                       {50, "0"}, {51, "90"}});
+    stp::Mesh mesh;
+    CHECK(loadDxfText(text, &mesh));
+    CHECK(mesh.features.circles.size() == 1);
+    CHECK(mesh.features.contours.empty());
+    if (mesh.features.circles.empty()) return;
+    const stp::CircleFeature& c = mesh.features.circles[0];
+    CHECK_NEAR(c.startAngle, 0.0, 1e-12);
+    CHECK_NEAR(c.sweep, stp::kPi / 2, 1e-12);
+    CHECK(!c.full());
+    CHECK_NEAR(c.pointAt(c.startAngle + c.sweep).y, 4.0, 1e-12);
+}
+
+TEST(features_dxf_bulge_polyline_registers_arc_and_contour) {
+    // Cuadrado 10x10 con el lado de cierre abombado (semicirculo de radio 5).
+    const std::string text = entities({{0, "LWPOLYLINE"}, {90, "4"}, {70, "1"},
+                                       {10, "0"}, {20, "0"}, {10, "10"}, {20, "0"},
+                                       {10, "10"}, {20, "10"}, {10, "0"}, {20, "10"}, {42, "1"}});
+    stp::Mesh mesh;
+    CHECK(loadDxfText(text, &mesh));
+    CHECK(mesh.features.circles.size() == 1);
+    CHECK(mesh.features.contours.size() == 1);
+    if (mesh.features.circles.empty() || mesh.features.contours.empty()) return;
+    CHECK_NEAR(mesh.features.circles[0].radius, 5.0, 1e-12);
+    CHECK(mesh.features.contours[0].points.size() == 4);
+    CHECK_NEAR(mesh.features.contours[0].bulges[3], 1.0, 1e-12);
+}
+
+TEST(features_dxf_segments_are_flagged_straight_or_curved) {
+    const std::string text = entities({{0, "LINE"}, {10, "0"}, {20, "0"}, {11, "10"}, {21, "0"},
+                                       {0, "CIRCLE"}, {10, "0"}, {20, "0"}, {40, "1"}});
+    stp::Mesh mesh;
+    CHECK(loadDxfText(text, &mesh));
+    CHECK(mesh.edgeCurve.size() == mesh.edgeLines.size() / 2);
+    if (mesh.edgeCurve.size() < 2) return;
+    CHECK(mesh.edgeCurve[0] == 0);
+    CHECK(mesh.edgeCurve[1] == 1);
+    CHECK(mesh.edgeCurve.back() == 1);
+}
+
+TEST(features_mirrored_insert_keeps_radius) {
+    const std::string text = document(
+        {}, {{0, "BLOCK"}, {2, "B"}, {70, "0"}, {10, "0"}, {20, "0"}, {30, "0"},
+             {0, "CIRCLE"}, {10, "2"}, {20, "0"}, {30, "0"}, {40, "3"},
+             {0, "ENDBLK"}},
+        {{0, "INSERT"}, {2, "B"}, {10, "10"}, {20, "0"}, {30, "0"},
+         {210, "0"}, {220, "0"}, {230, "-1"}});
+    stp::Mesh mesh;
+    CHECK(loadDxfText(text, &mesh));
+    CHECK(mesh.features.circles.size() == 1);
+    if (mesh.features.circles.empty()) return;
+    CHECK_NEAR(mesh.features.circles[0].radius, 3.0, 1e-12);
+    CHECK_NEAR(mesh.features.circles[0].center.x, -12.0, 1e-12);
+}
+
+TEST(features_nonuniform_insert_drops_circle) {
+    const std::string text = document(
+        {}, {{0, "BLOCK"}, {2, "B"}, {70, "0"}, {10, "0"}, {20, "0"}, {30, "0"},
+             {0, "CIRCLE"}, {10, "0"}, {20, "0"}, {30, "0"}, {40, "3"},
+             {0, "ENDBLK"}},
+        {{0, "INSERT"}, {2, "B"}, {10, "0"}, {20, "0"}, {30, "0"}, {41, "2"}, {42, "1"}});
+    stp::Mesh mesh;
+    CHECK(loadDxfText(text, &mesh));
+    CHECK(mesh.features.circles.empty());
+    CHECK(mesh.features.contours.empty());
+    CHECK(!mesh.edgeLines.empty());  // se sigue dibujando, como elipse
+}
+
+TEST(features_dxf_units_from_insunits) {
+    stp::Mesh inches;
+    CHECK(loadDxfText(headerSection({{9, "$INSUNITS"}, {70, "1"}}) +
+                          entities({{0, "LINE"}, {10, "0"}, {20, "0"}, {11, "1"}, {21, "0"}}),
+                      &inches));
+    CHECK(inches.units == stp::LengthUnit::Inch);
+    stp::Mesh meters;
+    CHECK(loadDxfText(headerSection({{9, "$INSUNITS"}, {70, "6"}}) +
+                          entities({{0, "LINE"}, {10, "0"}, {20, "0"}, {11, "1"}, {21, "0"}}),
+                      &meters));
+    CHECK(meters.units == stp::LengthUnit::Meter);
+}
+
 // --- Planaridad ----------------------------------------------------------------
 
 namespace {

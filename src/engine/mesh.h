@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "features.h"
 #include "geom.h"
 
 namespace stp {
@@ -63,6 +64,12 @@ struct Mesh {
     std::vector<std::uint32_t> indices;
     std::vector<Vec3> edgeLines;  // consecutive pairs form one segment each
     std::vector<MeshText> texts;
+    // 1 si el segmento i es parte de una curva muestreada (arco, spline...),
+    // 0 si es una recta de verdad: solo las rectas ofrecen extremos y puntos
+    // medios para enganchar al medir.
+    std::vector<std::uint8_t> edgeCurve;
+    MeshFeatures features;
+    LengthUnit units = LengthUnit::Unknown;
     BBox bounds;
 
     int faces = 0;          // faces successfully tessellated
@@ -83,9 +90,10 @@ struct Mesh {
         indices.push_back(b);
         indices.push_back(c);
     }
-    void addSegment(const Vec3& a, const Vec3& b) {
+    void addSegment(const Vec3& a, const Vec3& b, bool curve = false) {
         edgeLines.push_back(a);
         edgeLines.push_back(b);
+        edgeCurve.push_back(curve ? 1 : 0);
         bounds.add(a);
         bounds.add(b);
     }

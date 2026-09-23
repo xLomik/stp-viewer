@@ -346,7 +346,13 @@ private:
                    const Mat4& transform);
     std::string decode(const std::string& raw) const;
     void emitLine(const Vec3& a, const Vec3& b, const Mat4& transform);
-    void emitStrip(const std::vector<Vec3>& points, bool closed, const Mat4& transform);
+    void emitStrip(const std::vector<Vec3>& points, bool closed, const Mat4& transform,
+                   bool curve = false);
+    // Registran elementos medibles si la transformacion no deforma los circulos.
+    void addCircle(const Vec3& center, const Frame& frame, double radius, double start,
+                   double sweep, const Mat4& transform);
+    void addContour(const std::vector<Vec3>& points, const std::vector<double>& bulges,
+                    const Frame& frame, const Mat4& transform);
     void emitArc(const Entity& entity, double startAngle, double sweep, const Mat4& transform);
     void emitEllipse(const Entity& entity, const Mat4& transform);
     void emitSpline(const Entity& entity, const Mat4& transform);
@@ -463,16 +469,64 @@ void DxfReader::emitLine(const Vec3& a, const Vec3& b, const Mat4& transform) {
     M.addSegment(transform.point(a), transform.point(b));
 }
 
-void DxfReader::emitStrip(const std::vector<Vec3>& points, bool closed, const Mat4& transform) {
+void DxfReader::emitStrip(const std::vector<Vec3>& points, bool closed, const Mat4& transform,
+                          bool curve) {
     if (points.size() < 2) return;
     Vec3 previous = transform.point(points[0]);
     const Vec3 first = previous;
     for (std::size_t i = 1; i < points.size(); ++i) {
         const Vec3 current = transform.point(points[i]);
-        M.addSegment(previous, current);
+        M.addSegment(previous, current, curve);
         previous = current;
     }
-    if (closed && points.size() > 2) M.addSegment(previous, first);
+    if (closed && points.size() > 2) M.addSegment(previous, first, curve);
+}
+
+// Ejes del objeto transformados. Devuelve false si la transformacion deforma
+// los circulos (escala distinta en x e y, o ejes que dejan de ser perpendiculares).
+bool conformalAxes(const Frame& frame, const Mat4& transform, Vec3* x, Vec3* y, double* scale) {
+    *x = transform.direction(frame.x);
+    *y = transform.direction(frame.y);
+    const double lx = length(*x), ly = length(*y);
+    if (lx < 1e-12 || ly < 1e-12) return false;
+    if (std::fabs(lx - ly) > 1e-9 * std::max(lx, ly)) return false;
+    if (std::fabs(dot(*x, *y)) > 1e-9 * lx * ly) return false;
+    *scale = lx;
+    return true;
+}
+
+void DxfReader::addCircle(const Vec3& center, const Frame& frame, double radius, double start,
+                          double sweep, const Mat4& transform) {
+    Vec3 x, y;
+    double scale = 1.0;
+    if (radius <= 0 || !conformalAxes(frame, transform, &x, &y, &scale)) return;
+    CircleFeature circle;
+    circle.center = transform.point(center);
+    circle.xAxis = normalize(x);
+    // Con espejo la normal se invierte y el giro sigue siendo el mismo en pantalla.
+    circle.normal = normalize(cross(x, y));
+    circle.radius = radius * scale;
+    circle.startAngle = start;
+    circle.sweep = sweep;
+    M.features.circles.push_back(circle);
+}
+
+void DxfReader::addContour(const std::vector<Vec3>& points, const std::vector<double>& bulges,
+                           const Frame& frame, const Mat4& transform) {
+    Vec3 x, y;
+    double scale = 1.0;
+    bool curved = false;
+    for (const double b : bulges) curved = curved || std::fabs(b) > 1e-9;
+    const bool conformal = conformalAxes(frame, transform, &x, &y, &scale);
+    if (curved && !conformal) return;
+    if (points.size() < (curved ? 2u : 3u)) return;
+    ContourFeature contour;
+    for (const Vec3& p : points) contour.points.push_back(transform.point(p));
+    contour.bulges = bulges;
+    const Vec3 n = cross(transform.direction(frame.x), transform.direction(frame.y));
+    if (length(n) < 1e-18) return;
+    contour.normal = normalize(n);
+    M.features.contours.push_back(std::move(contour));
 }
 
 void DxfReader::emitQuad(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d,
@@ -513,7 +567,14 @@ void DxfReader::emitArc(const Entity& entity, double startAngle, double sweep,
         points.push_back(center + frame.x * (radius * std::cos(angle)) +
                          frame.y * (radius * std::sin(angle)));
     }
-    emitStrip(points, false, transform);
+    emitStrip(points, false, transform, true);
+
+    addCircle(center, frame, radius, startAngle, sweep, transform);
+    if (std::fabs(sweep) >= 2 * kPi - 1e-9) {
+        // Un circulo es tambien un contorno cerrado: dos medias vueltas.
+        addContour({center + frame.x * radius, center - frame.x * radius}, {1.0, 1.0}, frame,
+                   transform);
+    }
 }
 
 void DxfReader::emitEllipse(const Entity& entity, const Mat4& transform) {
@@ -536,7 +597,7 @@ void DxfReader::emitEllipse(const Entity& entity, const Mat4& transform) {
         const double t = start + sweep * i / steps;
         points.push_back(center + major * std::cos(t) + minor * std::sin(t));
     }
-    emitStrip(points, false, transform);
+    emitStrip(points, false, transform, true);
 }
 
 void DxfReader::emitSpline(const Entity& entity, const Mat4& transform) {
@@ -579,7 +640,7 @@ void DxfReader::emitSpline(const Entity& entity, const Mat4& transform) {
                 points.push_back(curve.eval(curve.tMin() +
                                             (curve.tMax() - curve.tMin()) * i / steps));
             }
-            emitStrip(points, false, transform);
+            emitStrip(points, false, transform, true);
             return;
         }
     }
@@ -604,7 +665,7 @@ void DxfReader::emitSpline(const Entity& entity, const Mat4& transform) {
         }
     }
     points.push_back(fit.back());
-    emitStrip(points, false, transform);
+    emitStrip(points, false, transform, true);
 }
 
 void DxfReader::emitPath(const std::vector<PathVertex>& vertices, bool closed, double elevation,
@@ -613,8 +674,6 @@ void DxfReader::emitPath(const std::vector<PathVertex>& vertices, bool closed, d
     if (n < 2) return;
     auto toWorld = [&](double x, double y) { return frame.dirToWorld(Vec3(x, y, elevation)); };
 
-    std::vector<Vec3> points;
-    points.push_back(toWorld(vertices[0].x, vertices[0].y));
     const std::size_t segments = closed ? n : n - 1;
     for (std::size_t i = 0; i < segments; ++i) {
         const PathVertex& a = vertices[i];
@@ -630,14 +689,30 @@ void DxfReader::emitPath(const std::vector<PathVertex>& vertices, bool closed, d
             const double radius = std::sqrt((a.x - cx) * (a.x - cx) + (a.y - cy) * (a.y - cy));
             const double start = std::atan2(a.y - cy, a.x - cx);
             const int steps = arcSteps(sweep);
-            for (int k = 1; k < steps; ++k) {
+            std::vector<Vec3> arc;
+            arc.reserve(steps + 1);
+            for (int k = 0; k <= steps; ++k) {
                 const double angle = start + sweep * k / steps;
-                points.push_back(toWorld(cx + radius * std::cos(angle), cy + radius * std::sin(angle)));
+                arc.push_back(k == steps ? toWorld(b.x, b.y)
+                                         : toWorld(cx + radius * std::cos(angle),
+                                                   cy + radius * std::sin(angle)));
             }
+            emitStrip(arc, false, transform, true);
+            addCircle(toWorld(cx, cy), frame, radius, start, sweep, transform);
+        } else {
+            emitLine(toWorld(a.x, a.y), toWorld(b.x, b.y), transform);
         }
-        points.push_back(toWorld(b.x, b.y));
     }
-    emitStrip(points, false, transform);
+
+    if (closed) {
+        std::vector<Vec3> points;
+        std::vector<double> bulges;
+        for (const PathVertex& v : vertices) {
+            points.push_back(toWorld(v.x, v.y));
+            bulges.push_back(v.bulge);
+        }
+        addContour(points, bulges, frame, transform);
+    }
 }
 
 void DxfReader::emitPolyline(const std::vector<Entity>& vertices, const Entity& header,
@@ -928,6 +1003,21 @@ bool DxfReader::run(const char* data, std::size_t length, std::string* error, Lo
     for (std::size_t i = 0; i + 1 < pairs.size() && i < 4000; ++i) {
         if (pairs[i].code == 9 && pairs[i].value == "$ACADVER") {
             m_ansi = pairs[i + 1].value < "AC1021";
+            break;
+        }
+    }
+
+    // $INSUNITS: 1 pulgada, 2 pie, 4 mm, 5 cm, 6 m. Sin el dato, mm.
+    M.units = LengthUnit::Millimeter;
+    for (std::size_t i = 0; i + 1 < pairs.size() && i < 4000; ++i) {
+        if (pairs[i].code == 9 && pairs[i].value == "$INSUNITS" && pairs[i + 1].code == 70) {
+            switch (pairs[i + 1].integer()) {
+                case 1: M.units = LengthUnit::Inch; break;
+                case 2: M.units = LengthUnit::Foot; break;
+                case 5: M.units = LengthUnit::Centimeter; break;
+                case 6: M.units = LengthUnit::Meter; break;
+                default: break;
+            }
             break;
         }
     }
