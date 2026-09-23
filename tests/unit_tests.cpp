@@ -1061,6 +1061,169 @@ TEST(snap_is_fast_on_huge_drawing) {
     CHECK(buildMs < 3000.0);
 }
 
+// --- Calculos de medida ---------------------------------------------------------------
+
+TEST(measure_distance_and_deltas) {
+    const stp::DistanceResult d = stp::measureDistance(stp::Vec3(1, 2, 3), stp::Vec3(4, 6, 3), nullptr);
+    CHECK_NEAR(d.total, 5.0, 1e-12);
+    CHECK_NEAR(d.delta.x, 3.0, 1e-12);
+    CHECK_NEAR(d.delta.y, 4.0, 1e-12);
+    stp::Mesh mesh;
+    addRectangle(&mesh, stp::Vec3(0, 3, 0), stp::Vec3(40, 0, 0), stp::Vec3(0, 0, 15));
+    const stp::PlanarInfo plane = stp::detectPlanar(mesh);  // plano XZ visto de frente
+    const stp::DistanceResult p = stp::measureDistance(stp::Vec3(0, 3, 0), stp::Vec3(40, 3, 15), &plane);
+    CHECK_NEAR(p.delta.x, 40.0, 1e-9);  // a lo largo de u (X)
+    CHECK_NEAR(p.delta.y, 15.0, 1e-9);  // a lo largo de v (Z)
+    CHECK_NEAR(p.delta.z, 0.0, 1e-12);
+}
+
+TEST(measure_angles) {
+    CHECK_NEAR(stp::angleAt(stp::Vec3(1, 0, 0), stp::Vec3(0, 0, 0), stp::Vec3(0, 5, 0)), 90.0, 1e-9);
+    CHECK_NEAR(stp::angleAt(stp::Vec3(1, 0, 0), stp::Vec3(0, 0, 0), stp::Vec3(3, 3, 0)), 45.0, 1e-9);
+    // Dos rectas que se cortan en (10,0): el angulo depende de donde se hizo clic.
+    const double sharp = stp::angleBetweenLines(stp::Vec3(0, 0, 0), stp::Vec3(20, 0, 0), stp::Vec3(15, 0, 0),
+                                                stp::Vec3(10, 0, 0), stp::Vec3(20, 10, 0), stp::Vec3(15, 5, 0));
+    CHECK_NEAR(sharp, 45.0, 1e-9);
+    const double obtuse = stp::angleBetweenLines(stp::Vec3(0, 0, 0), stp::Vec3(20, 0, 0), stp::Vec3(2, 0, 0),
+                                                 stp::Vec3(10, 0, 0), stp::Vec3(20, 10, 0), stp::Vec3(15, 5, 0));
+    CHECK_NEAR(obtuse, 135.0, 1e-9);
+}
+
+TEST(measure_radius_from_circle_and_cylinder) {
+    stp::Mesh drawing;
+    CHECK(loadDxfText(entities({{0, "CIRCLE"}, {10, "0"}, {20, "0"}, {40, "5"}}), &drawing));
+    const stp::RadiusResult onEdge = stp::measureRadius(drawing, stp::Vec3(0, 5.01, 0), -1, 0.1);
+    CHECK(onEdge.ok);
+    CHECK_NEAR(onEdge.radius, 5.0, 1e-12);
+    const stp::RadiusResult atCenter = stp::measureRadius(drawing, stp::Vec3(0.02, 0, 0), -1, 0.1);
+    CHECK(atCenter.ok);
+    const stp::RadiusResult nothing = stp::measureRadius(drawing, stp::Vec3(20, 20, 0), -1, 0.1);
+    CHECK(!nothing.ok);
+    CHECK(nothing.error == "No hay un circulo aqui");
+
+    stp::Mesh part;
+    CHECK(loadStepText(readText("tests/samples/placa_agujero.stp"), &part));
+    int cylinderTriangle = -1;
+    for (const stp::FaceFeature& f : part.features.faces) {
+        if (f.kind == stp::SurfaceKind::Cylinder) cylinderTriangle = static_cast<int>(f.firstTriangle);
+    }
+    CHECK(cylinderTriangle >= 0);
+    const std::uint32_t* tri = &part.indices[3 * cylinderTriangle];
+    const stp::Vec3 inside = (part.positions[tri[0]] + part.positions[tri[1]] + part.positions[tri[2]]) * (1.0 / 3);
+    // Lejos de cualquier arista: tiene que salir de la cara cilindrica.
+    const stp::RadiusResult face = stp::measureRadius(part, inside, cylinderTriangle, 1e-6);
+    CHECK(face.ok);
+    CHECK_NEAR(face.radius, 10.0, 1e-9);
+
+    stp::Mesh stl;
+    const std::uint32_t a = stl.addVertex(stp::Vec3(0, 0, 0), stp::Vec3(0, 0, 1));
+    const std::uint32_t b = stl.addVertex(stp::Vec3(1, 0, 0), stp::Vec3(0, 0, 1));
+    const std::uint32_t c = stl.addVertex(stp::Vec3(0, 1, 0), stp::Vec3(0, 0, 1));
+    stl.addTriangle(a, b, c);
+    const stp::RadiusResult none = stp::measureRadius(stl, stp::Vec3(0.2, 0.2, 0), 0, 0.1);
+    CHECK(!none.ok);
+    CHECK(none.error == "Este formato no guarda circulos; usa distancia");
+}
+
+TEST(measure_area_of_plate_with_hole) {
+    const std::string text = entities({{0, "LWPOLYLINE"}, {90, "4"}, {70, "1"},
+                                       {10, "0"}, {20, "0"}, {10, "100"}, {20, "0"},
+                                       {10, "100"}, {20, "50"}, {10, "0"}, {20, "50"},
+                                       {0, "CIRCLE"}, {10, "50"}, {20, "25"}, {40, "5"}});
+    stp::Mesh mesh;
+    CHECK(loadDxfText(text, &mesh));
+    const stp::PlanarInfo plane = stp::detectPlanar(mesh);
+    const stp::AreaResult plate = stp::measureArea(mesh, stp::Vec3(10, 10, 0), -1, &plane);
+    CHECK(plate.ok);
+    CHECK_NEAR(plate.area, 5000.0 - 25.0 * stp::kPi, 1e-9);
+    CHECK_NEAR(plate.perimeter, 300.0 + 10.0 * stp::kPi, 1e-9);
+    CHECK(plate.holes.size() == 1);
+    const stp::AreaResult hole = stp::measureArea(mesh, stp::Vec3(50, 25, 0), -1, &plane);
+    CHECK(hole.ok);
+    CHECK_NEAR(hole.area, 25.0 * stp::kPi, 1e-9);
+    const stp::AreaResult outside = stp::measureArea(mesh, stp::Vec3(200, 25, 0), -1, &plane);
+    CHECK(!outside.ok);
+    CHECK(outside.error == "No hay un contorno cerrado aqui");
+}
+
+TEST(measure_area_of_bulged_contour_is_exact) {
+    // Cuadrado 10x10 con el lado izquierdo abombado hacia afuera: 100 + media circunferencia de r=5.
+    stp::Mesh mesh;
+    CHECK(loadDxfText(entities({{0, "LWPOLYLINE"}, {90, "4"}, {70, "1"},
+                                {10, "0"}, {20, "0"}, {10, "10"}, {20, "0"},
+                                {10, "10"}, {20, "10"}, {10, "0"}, {20, "10"}, {42, "1"}}),
+                      &mesh));
+    CHECK(mesh.features.contours.size() == 1);
+    if (mesh.features.contours.empty()) return;
+    CHECK_NEAR(stp::contourArea(mesh.features.contours[0]), 100.0 + 12.5 * stp::kPi, 1e-9);
+    CHECK_NEAR(stp::contourPerimeter(mesh.features.contours[0]), 30.0 + 5.0 * stp::kPi, 1e-9);
+    CHECK(stp::contourContains(mesh.features.contours[0], stp::Vec3(-3, 5, 0)));
+    CHECK(!stp::contourContains(mesh.features.contours[0], stp::Vec3(-6, 5, 0)));
+}
+
+TEST(measure_area_of_solid_face) {
+    stp::Mesh part;
+    CHECK(loadStepText(readText("tests/samples/placa_agujero.stp"), &part));
+    for (const stp::FaceFeature& f : part.features.faces) {
+        if (f.kind != stp::SurfaceKind::Cylinder) continue;
+        const std::uint32_t* tri = &part.indices[3 * f.firstTriangle];
+        const stp::Vec3 p = (part.positions[tri[0]] + part.positions[tri[1]] + part.positions[tri[2]]) * (1.0 / 3);
+        const stp::AreaResult r = stp::measureArea(part, p, static_cast<int>(f.firstTriangle), nullptr);
+        CHECK(r.ok);
+        // El agujero de la muestra esta partido en dos medias caras cilindricas:
+        // cada una mide pi*r*h y su borde son dos medias circunferencias y dos rectas.
+        const double height = part.bounds.size().z;
+        CHECK(std::fabs(r.area - stp::kPi * 10.0 * height) < 0.01 * r.area);
+        CHECK(std::fabs(r.perimeter - (2 * stp::kPi * 10.0 + 2 * height)) < 0.01 * r.perimeter);
+        CHECK(r.triangles.size() == f.triangleCount);
+    }
+}
+
+TEST(measure_area_floods_coplanar_triangles_without_faces) {
+    // Malla sin caras (como un STL): dos triangulos coplanares y uno doblado.
+    stp::Mesh mesh;
+    const stp::Vec3 n(0, 0, 1);
+    const std::uint32_t a = mesh.addVertex(stp::Vec3(0, 0, 0), n), b = mesh.addVertex(stp::Vec3(10, 0, 0), n);
+    const std::uint32_t c = mesh.addVertex(stp::Vec3(10, 10, 0), n), d = mesh.addVertex(stp::Vec3(0, 10, 0), n);
+    const std::uint32_t e = mesh.addVertex(stp::Vec3(10, 10, 5), n);
+    mesh.addTriangle(a, b, c);
+    mesh.addTriangle(a, c, d);
+    mesh.addTriangle(b, e, c);
+    const stp::AreaResult r = stp::measureArea(mesh, stp::Vec3(2, 1, 0), 0, nullptr);
+    CHECK(r.ok);
+    CHECK_NEAR(r.area, 100.0, 1e-9);
+    CHECK_NEAR(r.perimeter, 40.0, 1e-9);
+}
+
+TEST(pick_finds_triangle_under_saved_point) {
+    stp::Mesh part;
+    CHECK(loadStepText(readText("tests/samples/placa_agujero.stp"), &part));
+    stp::PickIndex pick;
+    pick.build(part);
+    const std::uint32_t* tri = &part.indices[3 * 7];
+    const stp::Vec3 p = (part.positions[tri[0]] + part.positions[tri[1]] + part.positions[tri[2]]) * (1.0 / 3);
+    const int found = pick.triangleAt(part, p, 1e-6);
+    CHECK(found >= 0);
+    if (found >= 0) {
+        const std::uint32_t* f = &part.indices[3 * found];
+        const stp::Vec3 n = stp::cross(part.positions[f[1]] - part.positions[f[0]], part.positions[f[2]] - part.positions[f[0]]);
+        CHECK(std::fabs(stp::dot(p - part.positions[f[0]], stp::normalize(n))) < 1e-6);
+    }
+    CHECK(pick.triangleAt(part, part.bounds.hi + stp::Vec3(50, 50, 50), 1e-6) == -1);
+}
+
+TEST(measure_formatting) {
+    CHECK(stp::formatNumber(220.0, 3) == "220");
+    CHECK(stp::formatNumber(12.5, 3) == "12.5");
+    CHECK(stp::formatNumber(1.0 / 3.0, 3) == "0.333");
+    CHECK(stp::formatNumber(-0.0001, 3) == "0");
+    CHECK(stp::formatLength(220.0, stp::LengthUnit::Millimeter) == "220 mm");
+    CHECK(stp::formatLength(3.25, stp::LengthUnit::Unknown) == "3.25");
+    CHECK(stp::formatArea(78.5398, stp::LengthUnit::Millimeter) == "78.54 mm\xC2\xB2");
+    CHECK(stp::formatAngle(45.0) == "45\xC2\xB0");
+    CHECK(stp::formatAngle(33.3333) == "33.33\xC2\xB0");
+}
+
 int main() {
     int failedTests = 0;
     for (const TestCase& test : registry()) {

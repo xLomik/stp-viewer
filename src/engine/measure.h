@@ -50,6 +50,8 @@ public:
     bool raycast(const Mesh& mesh, const Ray& ray, double* t, int* triangle) const;
     SnapResult snap(const Mesh& mesh, const Camera& camera, int width, int height, double sx,
                     double sy, const SnapOptions& options) const;
+    // Triangulo que contiene point (a menos de tolerance de su plano), o -1.
+    int triangleAt(const Mesh& mesh, const Vec3& point, double tolerance) const;
 
 private:
     struct SnapPoint {
@@ -64,5 +66,51 @@ private:
     std::vector<SnapPoint> m_snapPoints;
     double m_size = 1.0;
 };
+
+// --- Calculos ----------------------------------------------------------------
+
+struct DistanceResult {
+    double total = 0.0;
+    Vec3 delta;  // en ejes del mundo; con plano, (du, dv, 0) en los ejes del dibujo
+};
+DistanceResult measureDistance(const Vec3& a, const Vec3& b, const PlanarInfo* plane);
+
+// Angulo en vertex entre las semirrectas hacia a y hacia b, en grados (0..180).
+double angleAt(const Vec3& a, const Vec3& vertex, const Vec3& b);
+// Angulo entre dos rectas, del lado de los puntos donde se hizo clic, en grados.
+double angleBetweenLines(const Vec3& a0, const Vec3& a1, const Vec3& pickA, const Vec3& b0,
+                         const Vec3& b1, const Vec3& pickB);
+
+struct RadiusResult {
+    bool ok = false;
+    double radius = 0.0;
+    Vec3 center;
+    Vec3 normal{0, 0, 1};
+    std::string error;
+};
+// tolerance: distancia maxima (unidades del modelo) del punto al circulo o a su centro.
+RadiusResult measureRadius(const Mesh& mesh, const Vec3& point, int triangle, double tolerance);
+
+struct AreaResult {
+    bool ok = false;
+    double area = 0.0;
+    double perimeter = 0.0;             // borde exterior mas bordes de agujeros
+    std::vector<std::uint32_t> triangles;  // cara medida (3D)
+    int contour = -1;                   // contorno medido (plano)
+    std::vector<int> holes;             // contornos restados
+    std::string error;
+};
+AreaResult measureArea(const Mesh& mesh, const Vec3& point, int triangle, const PlanarInfo* plane);
+
+double contourArea(const ContourFeature& contour);
+double contourPerimeter(const ContourFeature& contour);
+bool contourContains(const ContourFeature& contour, const Vec3& point);
+std::vector<Vec3> contourOutline(const ContourFeature& contour);
+
+// Numeros con hasta `decimals` decimales, sin ceros sobrantes y con punto.
+std::string formatNumber(double value, int decimals);
+std::string formatLength(double value, LengthUnit unit);  // "220 mm"
+std::string formatArea(double value, LengthUnit unit);    // "78.54 mm²" (2 decimales)
+std::string formatAngle(double degrees);                  // "45.5°"
 
 }  // namespace stp
