@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "../src/engine/markup.h"
 #include "../src/engine/measure.h"
 #include "../src/engine/nurbs.h"
 #include "../src/formats/formats.h"
@@ -1222,6 +1223,143 @@ TEST(measure_formatting) {
     CHECK(stp::formatArea(78.5398, stp::LengthUnit::Millimeter) == "78.54 mm\xC2\xB2");
     CHECK(stp::formatAngle(45.0) == "45\xC2\xB0");
     CHECK(stp::formatAngle(33.3333) == "33.33\xC2\xB0");
+}
+
+// --- Marcas ------------------------------------------------------------------------------
+
+namespace {
+
+stp::MarkupDocument sampleMarkup() {
+    stp::MarkupDocument doc;
+    doc.modelName = "brida.dxf";
+    doc.modelSize = 64385;
+    doc.modelDate = "2026-09-23T12:00:00";
+    stp::MarkupView view;
+    view.id = doc.newId();
+    view.name = "Vista 1";
+    view.camera.target = stp::Vec3(1.5, -2.25, 3);
+    view.camera.yaw = 0.3;
+    view.camera.pitch = -0.2;
+    view.camera.orthoHeight = 123.456;
+    view.camera.planView = true;
+    view.camera.planNormal = stp::Vec3(0, -1, 0);
+    view.camera.planRight = stp::Vec3(1, 0, 0);
+    view.camera.planUp = stp::Vec3(0, 0, 1);
+    doc.views.push_back(view);
+    const stp::MarkKind kinds[] = {stp::MarkKind::Distance, stp::MarkKind::Radius, stp::MarkKind::Angle,
+                                   stp::MarkKind::Area, stp::MarkKind::Note, stp::MarkKind::Highlight,
+                                   stp::MarkKind::Underline, stp::MarkKind::Pen, stp::MarkKind::Rectangle,
+                                   stp::MarkKind::Ellipse, stp::MarkKind::Cloud};
+    for (stp::MarkKind kind : kinds) {
+        stp::Mark mark;
+        mark.id = doc.newId();
+        mark.kind = kind;
+        mark.points = {stp::Vec3(0.1, 0.2, 0.3), stp::Vec3(1.0 / 3.0, 1e-9, -7)};
+        mark.color = stp::kMarkBlue;
+        mark.view = stp::isMeasurement(kind) || kind == stp::MarkKind::Note ? 0 : view.id;
+        if (kind == stp::MarkKind::Note) mark.text = "Revisar este agujero";
+        doc.marks.push_back(mark);
+    }
+    return doc;
+}
+
+}  // namespace
+
+TEST(markup_roundtrip_is_identical) {
+    const stp::MarkupDocument doc = sampleMarkup();
+    const std::string text = stp::serializeMarkup(doc);
+    CHECK(text.compare(0, 20, "stp-viewer-marcas 1\n") == 0);
+    stp::MarkupDocument back;
+    const stp::MarkupParseReport report = stp::parseMarkup(text, &back);
+    CHECK(report.recognized);
+    CHECK(report.badLines == 0);
+    CHECK(!report.newerVersion);
+    CHECK(stp::serializeMarkup(back) == text);
+    CHECK(back.marks.size() == doc.marks.size());
+    CHECK(back.views.size() == 1);
+    CHECK(back.nextId == doc.nextId);
+    if (back.views.size() == 1) {
+        CHECK(back.views[0].camera.planView);
+        CHECK_NEAR(back.views[0].camera.orthoHeight, 123.456, 0);
+    }
+    if (!back.marks.empty()) CHECK(back.marks[0].points[1].x == 1.0 / 3.0);
+}
+
+TEST(markup_roundtrip_hostile_text) {
+    stp::MarkupDocument doc;
+    stp::Mark note;
+    note.id = doc.newId();
+    note.kind = stp::MarkKind::Note;
+    note.points = {stp::Vec3(), stp::Vec3(1, 1, 0)};
+    note.text = "Ca\xC3\xB1" "o \"interior\" \\ ruta C:\\piezas\nsegunda linea\ttab = x;y";
+    note.text += std::string(10000, 'x');
+    doc.marks.push_back(note);
+    stp::MarkupDocument back;
+    stp::parseMarkup(stp::serializeMarkup(doc), &back);
+    CHECK(back.marks.size() == 1);
+    if (!back.marks.empty()) CHECK(back.marks[0].text == note.text);
+    // Una linea por elemento: el salto de linea del texto va escapado.
+    const std::string text = stp::serializeMarkup(doc);
+    CHECK(std::count(text.begin(), text.end(), '\n') == 3);  // cabecera, modelo, nota
+}
+
+TEST(markup_tolerates_damaged_and_future_files) {
+    std::string text = stp::serializeMarkup(sampleMarkup());
+    text += "medida id=99 tipo=distancia puntos=1,2\n";      // punto incompleto
+    text += "garabato id=100 color=#FF0000\n";                // tipo desconocido
+    text += "nota id=101 puntos=0,0,0;1,1,1 texto=\"sin cerrar\n";
+    stp::MarkupDocument back;
+    const stp::MarkupParseReport damaged = stp::parseMarkup(text, &back);
+    CHECK(damaged.recognized);
+    CHECK(damaged.badLines == 3);
+    CHECK(back.marks.size() == sampleMarkup().marks.size());
+
+    std::string future = stp::serializeMarkup(sampleMarkup());
+    future.replace(0, 19, "stp-viewer-marcas 7");
+    future += "medida id=200 tipo=distancia vista=0 puntos=0,0,0;1,0,0 nueva_clave=1\n";
+    stp::MarkupDocument later;
+    const stp::MarkupParseReport newer = stp::parseMarkup(future, &later);
+    CHECK(newer.newerVersion);
+    CHECK(newer.badLines == 0);  // las claves nuevas se ignoran, la linea se entiende
+    CHECK(later.marks.size() == sampleMarkup().marks.size() + 1);
+
+    stp::MarkupDocument other;
+    CHECK(!stp::parseMarkup("hola\nmundo\n", &other).recognized);
+    CHECK(other.marks.empty());
+}
+
+TEST(markup_detects_changed_model) {
+    const stp::MarkupDocument doc = sampleMarkup();
+    CHECK(!stp::modelChanged(doc, 64385, "2026-09-23T12:00:00"));
+    CHECK(stp::modelChanged(doc, 64386, "2026-09-23T12:00:00"));
+    CHECK(stp::modelChanged(doc, 64385, "2026-09-24T08:00:00"));
+    stp::MarkupDocument fresh;  // sin datos del modelo: nada que comparar
+    CHECK(!stp::modelChanged(fresh, 1, "x"));
+}
+
+TEST(markup_views_match_within_half_percent) {
+    stp::Camera a;
+    a.orthoHeight = 100.0;
+    stp::Camera b = a;
+    CHECK(stp::sameView(a, b));
+    b.orthoHeight = 100.4;
+    CHECK(stp::sameView(a, b));
+    b.orthoHeight = 101.0;
+    CHECK(!stp::sameView(a, b));
+    b = a;
+    b.target = a.target + a.right() * 0.4;
+    CHECK(stp::sameView(a, b));
+    b.target = a.target + a.right() * 1.0;
+    CHECK(!stp::sameView(a, b));
+    b = a;
+    b.yaw += 0.01;
+    CHECK(!stp::sameView(a, b));
+
+    const stp::MarkupDocument doc = sampleMarkup();
+    const stp::Mark& stroke = doc.marks[5];  // resaltador, en la vista 1
+    CHECK(stp::markVisible(stroke, doc, doc.views[0].camera));
+    CHECK(!stp::markVisible(stroke, doc, a));
+    CHECK(stp::markVisible(doc.marks[0], doc, a));  // las medidas se ven siempre
 }
 
 int main() {
