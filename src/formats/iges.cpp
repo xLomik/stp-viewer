@@ -65,9 +65,13 @@ private:
 
     void emitLine(const Parameters& p, const Mat4& transform);
     void emitArc(const Parameters& p, const Mat4& transform);
+    void noteArc(const Parameters& p, const Mat4& transform) const;
     void emitCurve(int pointer, const Mat4& transform);
     void emitSurface(int pointer, const std::vector<int>& trimCurves, const Mat4& transform);
-    void emitBrepFace(int pointer, const Mat4& transform);
+    SurfaceKind emitBrepFace(int pointer, const Mat4& transform);
+    double m_lastFaceRadius = 0.0;
+    Vec3 m_lastFaceAxisOrigin;
+    Vec3 m_lastFaceAxisDir{0, 0, 1};
     void emitSurfaceWithLoops(const NurbsSurface& surface,
                               const std::vector<std::vector<Vec2>>& loops, const Mat4& transform);
     void emitAnalyticFace(const Surface& surface, const std::vector<std::vector<Vec2>>& loops,
@@ -94,6 +98,44 @@ std::string trimSpaces(const std::string& text) {
     while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) ++begin;
     while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
     return text.substr(begin, end - begin);
+}
+
+// Campos de la seccion global, respetando los textos Hollerith (5Hhola).
+std::vector<std::string> splitGlobal(const std::string& text, char field, char record) {
+    std::vector<std::string> fields;
+    std::string current;
+    std::size_t i = 0;
+    while (i < text.size()) {
+        std::size_t digits = i;
+        while (digits < text.size() && std::isdigit(static_cast<unsigned char>(text[digits]))) ++digits;
+        if (current.empty() && digits > i && digits < text.size() &&
+            (text[digits] == 'H' || text[digits] == 'h')) {
+            const std::size_t count = static_cast<std::size_t>(std::atoi(text.substr(i, digits - i).c_str()));
+            current = text.substr(digits + 1, count);
+            i = digits + 1 + count;
+            continue;
+        }
+        const char c = text[i++];
+        if (c == field || c == record) {
+            fields.push_back(trimSpaces(current));
+            current.clear();
+            if (c == record) break;
+        } else {
+            current.push_back(c);
+        }
+    }
+    return fields;
+}
+
+LengthUnit igesUnit(int flag) {
+    switch (flag) {
+        case 1: return LengthUnit::Inch;
+        case 2: return LengthUnit::Millimeter;
+        case 4: return LengthUnit::Foot;
+        case 6: return LengthUnit::Meter;
+        case 10: return LengthUnit::Centimeter;
+        default: return LengthUnit::Unknown;
+    }
 }
 
 bool IgesReader::parseSections(const char* data, std::size_t length, std::string* error) {
@@ -138,6 +180,9 @@ bool IgesReader::parseSections(const char* data, std::size_t length, std::string
             m_recordSeparator = global[next + 3];
         }
     }
+
+    const std::vector<std::string> globals = splitGlobal(global, m_fieldSeparator, m_recordSeparator);
+    if (globals.size() > 13) M.units = igesUnit(std::atoi(globals[13].c_str()));
 
     for (std::size_t i = 0; i + 1 < directoryLines.size(); i += 2) {
         const std::string& first = directoryLines[i];
@@ -412,6 +457,36 @@ void IgesReader::emitLine(const Parameters& p, const Mat4& transform) {
                  transform.point(Vec3(p.number(4), p.number(5), p.number(6))));
 }
 
+// Registra la entidad 100 como circulo exacto (M es una referencia: se puede
+// escribir desde metodos const, igual que al dibujar las aristas).
+void IgesReader::noteArc(const Parameters& p, const Mat4& transform) const {
+    if (p.size() < 8) return;
+    const double z = p.number(1);
+    const Vec3 center(p.number(2), p.number(3), z);
+    const Vec3 start(p.number(4), p.number(5), z);
+    const Vec3 end(p.number(6), p.number(7), z);
+    const double radius = distance(center, start);
+    if (radius < 1e-12) return;
+    const Vec3 x = transform.direction(Vec3(1, 0, 0));
+    const Vec3 y = transform.direction(Vec3(0, 1, 0));
+    const double lx = length(x), ly = length(y);
+    if (lx < 1e-12 || std::fabs(lx - ly) > 1e-9 * lx || std::fabs(dot(x, y)) > 1e-9 * lx * ly) return;
+
+    const double a0 = std::atan2(start.y - center.y, start.x - center.x);
+    double sweep = std::atan2(end.y - center.y, end.x - center.x) - a0;
+    if (distance(start, end) < 1e-9) sweep = 2 * kPi;
+    else if (sweep <= 0) sweep += 2 * kPi;
+
+    CircleFeature circle;
+    circle.center = transform.point(center);
+    circle.xAxis = normalize(x);
+    circle.normal = normalize(cross(x, y));
+    circle.radius = radius * lx;
+    circle.startAngle = a0;
+    circle.sweep = sweep;
+    M.features.circles.push_back(circle);
+}
+
 void IgesReader::emitArc(const Parameters& p, const Mat4& transform) {
     if (p.size() < 8) return;
     const double z = p.number(1);
@@ -435,9 +510,10 @@ void IgesReader::emitArc(const Parameters& p, const Mat4& transform) {
         const Vec3 point(center.x + radius * std::cos(angle), center.y + radius * std::sin(angle),
                          z);
         const Vec3 world = transform.point(point);
-        if (i > 0) M.addSegment(previous, world);
+        if (i > 0) M.addSegment(previous, world, true);
         previous = world;
     }
+    noteArc(p, transform);
 }
 
 void IgesReader::emitCurve(int pointer, const Mat4& transform) {
@@ -448,7 +524,7 @@ void IgesReader::emitCurve(int pointer, const Mat4& transform) {
     for (int i = 0; i <= steps; ++i) {
         const double t = curve.tMin() + (curve.tMax() - curve.tMin()) * i / steps;
         const Vec3 world = transform.point(curve.eval(t));
-        if (i > 0) M.addSegment(previous, world);
+        if (i > 0) M.addSegment(previous, world, true);
         previous = world;
     }
 }
@@ -546,7 +622,16 @@ std::vector<Vec2> IgesReader::loopOnAnalytic(int loopPointer, const Surface& sur
         if (std::find(m_drawnCurves.begin(), m_drawnCurves.end(), curvePointer) ==
             m_drawnCurves.end()) {
             m_drawnCurves.push_back(curvePointer);
-            for (std::size_t k = 1; k < part.size(); ++k) M.addSegment(part[k - 1], part[k]);
+            const auto curveEntry = m_directory.find(curvePointer);
+            const int curveType = curveEntry == m_directory.end() ? 0 : curveEntry->second.type;
+            for (std::size_t k = 1; k < part.size(); ++k) {
+                M.addSegment(part[k - 1], part[k], curveType != 110);
+            }
+            if (curveType == 100) {
+                if (const Parameters* arc = parametersOf(curvePointer)) {
+                    noteArc(*arc, transformOf(curveEntry->second.transform));
+                }
+            }
         }
         if (orientation == 0) std::reverse(part.begin(), part.end());
         for (const Vec3& q : part) {
@@ -607,10 +692,10 @@ std::vector<Vec2> IgesReader::sampleLoop(int loopPointer, const NurbsSurface& su
 }
 
 // Cara de un modelo B-rep (510): superficie base mas sus bucles de recorte.
-void IgesReader::emitBrepFace(int pointer, const Mat4& transform) {
+SurfaceKind IgesReader::emitBrepFace(int pointer, const Mat4& transform) {
     (void)transform;
     const Parameters* p = parametersOf(pointer);
-    if (!p || p->size() < 4) return;
+    if (!p || p->size() < 4) return SurfaceKind::Other;
 
     const int surfacePointer = p->integer(1);
     const int loopCount = p->integer(2);
@@ -620,7 +705,7 @@ void IgesReader::emitBrepFace(int pointer, const Mat4& transform) {
     Surface analytic;
     NurbsSurface nurbs;
     const bool isAnalytic = readAnalyticSurface(surfacePointer, &analytic);
-    if (!isAnalytic && !readSurface(surfacePointer, &nurbs)) return;
+    if (!isAnalytic && !readSurface(surfacePointer, &nurbs)) return SurfaceKind::Other;
 
     if (isAnalytic) {
         const Mat4 surfaceTransform = transformOf(m_directory[surfacePointer].transform);
@@ -653,6 +738,18 @@ void IgesReader::emitBrepFace(int pointer, const Mat4& transform) {
         emitAnalyticFace(analytic, loops, Mat4::identity(), false);
     } else {
         emitSurfaceWithLoops(nurbs, loops, transform);
+    }
+    if (!isAnalytic) return SurfaceKind::Other;
+    m_lastFaceRadius = analytic.radius;
+    m_lastFaceAxisOrigin = analytic.frame.origin;
+    m_lastFaceAxisDir = analytic.frame.z;
+    switch (analytic.type) {
+        case Surface::Type::Plane: return SurfaceKind::Plane;
+        case Surface::Type::Cylinder: return SurfaceKind::Cylinder;
+        case Surface::Type::Cone: return SurfaceKind::Cone;
+        case Surface::Type::Sphere: return SurfaceKind::Sphere;
+        case Surface::Type::Torus: return SurfaceKind::Torus;
+        default: return SurfaceKind::Other;
     }
 }
 
@@ -831,6 +928,8 @@ bool IgesReader::run(const char* data, std::size_t length, std::string* error, L
         if (!p) continue;
         const Mat4 transform = transformOf(entry.transform);
 
+        const std::size_t firstTriangle = M.triangleCount();
+        SurfaceKind kind = SurfaceKind::Other;
         switch (entry.type) {
             case 128: {
                 // Una superficie usada por una cara ya se dibuja recortada.
@@ -845,7 +944,7 @@ bool IgesReader::run(const char* data, std::size_t length, std::string* error, L
                 break;
             }
             case 510:
-                emitBrepFace(pointer, transform);
+                kind = emitBrepFace(pointer, transform);
                 ++surfaces;
                 break;
             case 144: {
@@ -861,6 +960,18 @@ bool IgesReader::run(const char* data, std::size_t length, std::string* error, L
             }
             default:
                 break;
+        }
+        if (M.triangleCount() > firstTriangle) {
+            FaceFeature face;
+            face.firstTriangle = static_cast<std::uint32_t>(firstTriangle);
+            face.triangleCount = static_cast<std::uint32_t>(M.triangleCount() - firstTriangle);
+            face.kind = kind;
+            if (entry.type == 510) {
+                face.radius = m_lastFaceRadius;
+                face.axisOrigin = m_lastFaceAxisOrigin;
+                face.axisDir = m_lastFaceAxisDir;
+            }
+            M.features.faces.push_back(face);
         }
     }
 

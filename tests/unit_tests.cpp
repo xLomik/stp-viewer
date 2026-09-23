@@ -651,6 +651,64 @@ TEST(features_step_units_inch) {
     CHECK(mesh.units == stp::LengthUnit::Inch);
 }
 
+namespace {
+
+// Linea IGES de 80 columnas: 72 de datos, la letra de seccion y el numero.
+std::string igesLine(const std::string& data, char section, int sequence) {
+    std::string line = data;
+    line.resize(72, ' ');
+    char number[16];
+    std::snprintf(number, sizeof(number), "%7d", sequence);
+    return line + section + number + "\n";
+}
+
+// Archivo IGES con un solo circulo (entidad 100) de radio 5 en (10, 20).
+std::string igesCircle(int unitFlag) {
+    std::string out = igesLine("stp-viewer prueba", 'S', 1);
+    const std::string global = "1H,,1H;,4Hprod,8Hfile.igs,3Hsys,3H1.0,32,38,6,308,15,4Hprod,1.," +
+                               std::to_string(unitFlag) +
+                               ",2HMM,1,0.1,15H20260923.120000,0.001,100.,4Huser,3Horg,11,0;";
+    int g = 0;
+    for (std::size_t i = 0; i < global.size(); i += 72) out += igesLine(global.substr(i, 72), 'G', ++g);
+    char d1[96], d2[96];
+    std::snprintf(d1, sizeof(d1), "%8d%8d%8d%8d%8d%8d%8d%8d%8s", 100, 1, 0, 1, 0, 0, 0, 0, "00000000");
+    std::snprintf(d2, sizeof(d2), "%8d%8d%8d%8d%8d%8s%8s%8s%8d", 100, 0, 0, 1, 0, "", "", "", 0);
+    out += igesLine(d1, 'D', 1) + igesLine(d2, 'D', 2);
+    std::string p = "100,0.,10.,20.,15.,20.,15.,20.;";
+    p.resize(64, ' ');
+    p += "       1";  // columnas 65-72: puntero al directorio
+    out += igesLine(p, 'P', 1);
+    out += igesLine("S      1G      1D      2P      1", 'T', 1);
+    return out;
+}
+
+bool loadIgesText(const std::string& text, stp::Mesh* mesh) {
+    std::string error;
+    return stp::loadModel(text.data(), text.size(), ".igs", mesh, &error);
+}
+
+}  // namespace
+
+TEST(features_iges_arc_is_exact) {
+    stp::Mesh mesh;
+    CHECK(loadIgesText(igesCircle(2), &mesh));
+    CHECK(mesh.features.circles.size() == 1);
+    if (mesh.features.circles.empty()) return;
+    CHECK_NEAR(mesh.features.circles[0].radius, 5.0, 1e-12);
+    CHECK_NEAR(mesh.features.circles[0].center.y, 20.0, 1e-12);
+    CHECK(mesh.features.circles[0].full());
+    CHECK(mesh.units == stp::LengthUnit::Millimeter);
+    CHECK(!mesh.edgeCurve.empty() && mesh.edgeCurve[0] == 1);
+}
+
+TEST(features_iges_units) {
+    stp::Mesh inch, meter;
+    CHECK(loadIgesText(igesCircle(1), &inch));
+    CHECK(loadIgesText(igesCircle(6), &meter));
+    CHECK(inch.units == stp::LengthUnit::Inch);
+    CHECK(meter.units == stp::LengthUnit::Meter);
+}
+
 // --- Planaridad ----------------------------------------------------------------
 
 namespace {
