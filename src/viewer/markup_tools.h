@@ -40,7 +40,11 @@ public:
     Tool tool() const { return m_tool; }
     void setTool(Tool tool);
     // Algo en curso que Esc deberia cancelar antes de cerrar la ventana.
-    bool active() const { return m_tool != Tool::Navigate || !m_pending.empty(); }
+    bool active() const {
+        return m_tool != Tool::Navigate || !m_pending.empty() || m_selected >= 0 || m_edit != nullptr;
+    }
+    // Confirma el texto de una nota que se esta escribiendo (antes de guardar o exportar).
+    void commitPendingEdit() { closeNoteEditor(true); }
 
     bool handle(UINT msg, WPARAM wparam, LPARAM lparam);
     void draw(HDC dc, const Camera& camera, int width, int height, double scale, bool interactive) const;

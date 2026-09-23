@@ -246,6 +246,11 @@ void SceneView::invalidate() {
 
 void SceneView::loadFile(const std::wstring& path) {
     saveMarks(nullptr);
+    // Las marcas del modelo anterior no pueden quedar vivas mientras carga el
+    // nuevo: se guardarian con el nombre equivocado.
+    if (m_tools) m_tools->clear();
+    m_marksUnreadable = false;
+    m_marksForeign = false;
     m_path = path;
     std::string bytes;
     if (!readFileBytes(path, &bytes)) {
@@ -674,11 +679,19 @@ void SceneView::drawScene(HDC dc) {
 void SceneView::loadMarks() {
     if (!m_tools || !m_tools->editing() || m_path.empty()) return;
     std::string text;
-    if (!readFileBytes(markupPathOf(m_path), &text)) return;  // sin marcas todavia
+    const std::wstring file = markupPathOf(m_path);
+    if (!readFileBytes(file, &text)) {
+        if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            m_marksUnreadable = true;
+            m_tools->showMessage(L"No se pudo leer el archivo de marcas; no se va a modificar", 10000);
+        }
+        return;  // sin marcas todavia
+    }
 
     MarkupDocument doc;
     const MarkupParseReport report = parseMarkup(text, &doc);
     if (!report.recognized) {
+        m_marksForeign = true;
         m_tools->showMessage(L"El archivo de marcas no se reconoce; se reemplaza solo si marcas algo", 10000);
         return;
     }
@@ -693,11 +706,18 @@ void SceneView::loadMarks() {
 }
 
 bool SceneView::saveMarks(std::wstring* message) {
+    if (m_tools) m_tools->commitPendingEdit();
     if (!m_tools || !m_tools->editing() || m_path.empty() || !m_tools->dirty()) return true;
     const std::wstring target = markupPathOf(m_path);
     MarkupDocument doc = m_tools->document();
     fileStamp(m_path, &doc.modelSize, &doc.modelDate);
     doc.modelName = narrowUtf8(fileNameOf(m_path));
+
+    if (m_marksUnreadable) {
+        if (message) *message = L"El archivo de marcas no se pudo leer; no se sobrescribe: " + target;
+        return false;
+    }
+    if (m_marksForeign && doc.marks.empty()) return true;  // nunca se borra un archivo ajeno
 
     bool ok = true;
     if (doc.marks.empty()) {

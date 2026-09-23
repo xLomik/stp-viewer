@@ -86,10 +86,14 @@ struct RadiusResult {
     double radius = 0.0;
     Vec3 center;
     Vec3 normal{0, 0, 1};
+    bool onCircle = false;  // salio de un circulo o arco (no de una cara cilindrica)
     std::string error;
 };
 // tolerance: distancia maxima (unidades del modelo) del punto al circulo o a su centro.
 RadiusResult measureRadius(const Mesh& mesh, const Vec3& point, int triangle, double tolerance);
+// Punto que conviene guardar para volver a medir el radio: sobre el circulo
+// exacto (el clic cae en la cuerda muestreada) o el mismo punto si es una cara.
+Vec3 radiusAnchor(const RadiusResult& result, const Vec3& point);
 
 struct AreaResult {
     bool ok = false;

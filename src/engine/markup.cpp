@@ -176,7 +176,8 @@ std::string serializeMarkup(const MarkupDocument& doc) {
 MarkupParseReport parseMarkup(const std::string& text, MarkupDocument* doc) {
     MarkupParseReport report;
     *doc = MarkupDocument();
-    std::size_t start = 0;
+    // BOM de UTF-8 (lo agrega el Bloc de notas): no es parte de la cabecera.
+    std::size_t start = text.compare(0, 3, "\xEF\xBB\xBF") == 0 ? 3 : 0;
     bool first = true;
     int maxId = 0;
     while (start < text.size()) {

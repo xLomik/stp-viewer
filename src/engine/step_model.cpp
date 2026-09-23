@@ -380,6 +380,9 @@ void Builder::emitCurveSet(const Entity* set, const Mat4& xf) {
 }
 
 void Builder::buildShell(const Entity* shell, const Mat4& xf) {
+    // Las aristas se dibujan una vez por cascaron, no una vez por archivo: cada
+    // copia de una pieza repetida necesita sus aristas y circulos para medir.
+    m_edgeEmitted.clear();
     if (!shell) return;
     const std::vector<Value>& p = shell->params();
     if (p.size() < 2 || !p[1].isList()) return;

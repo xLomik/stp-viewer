@@ -165,7 +165,9 @@ std::wstring MarkupTools::hint() const {
 
 SnapResult MarkupTools::snapAt(int x, int y) const {
     SnapOptions options;
-    options.snapping = GetKeyState(VK_SHIFT) >= 0;
+    // El area no engancha: un punto de arista esta en dos caras y se mediria la
+    // que no se ve. Se usa el punto de la superficie bajo el cursor.
+    options.snapping = GetKeyState(VK_SHIFT) >= 0 && m_tool != Tool::Area;
     options.plane = m_host->markupPlane();
     options.radiusPixels = 8.0 * m_host->markupDpi() / 96.0;
     return m_host->markupPick().snap(m_host->markupMesh(), m_host->markupCamera(), m_host->markupWidth(),
@@ -558,6 +560,25 @@ void MarkupTools::clickMeasure(const SnapResult& snap) {
         case Tool::Area: {
             mark.kind = m_tool == Tool::Radius ? MarkKind::Radius : MarkKind::Area;
             mark.points = {snap.point};
+            if (m_tool == Tool::Radius) {
+                // 8 px a la profundidad del punto (tambien en perspectiva) y se guarda un
+                // punto exacto del circulo: al recalcular no depende de la camara.
+                const Camera& camera = m_host->markupCamera();
+                const double depth = dot(snap.point - camera.eye(), camera.forward());
+                const double reach = 8.0 * m_host->markupDpi() / 96.0 *
+                                     worldPerPixel(camera, m_host->markupHeight(), depth);
+                const Mesh& mesh = m_host->markupMesh();
+                const int triangle = snap.triangle >= 0
+                                         ? snap.triangle
+                                         : m_host->markupPick().triangleAt(mesh, snap.point,
+                                                                           std::max(1e-9, mesh.bounds.diagonal() * 1e-6));
+                const RadiusResult r = measureRadius(mesh, snap.point, triangle, reach);
+                if (!r.ok) {
+                    showMessage(widen(r.error));
+                    break;
+                }
+                mark.points = {radiusAnchor(r, snap.point)};
+            }
             const Value value = evaluate(mark);
             if (!value.ok) {
                 showMessage(value.error);
@@ -783,9 +804,8 @@ MarkupTools::Value MarkupTools::evaluate(const Mark& mark) const {
         case MarkKind::Radius: {
             if (mark.points.empty()) break;
             const int triangle = m_host->markupPick().triangleAt(mesh, mark.points[0], tolerance);
-            // Tolerancia de 8 px a la escala actual: lo que el usuario considero "sobre el circulo".
-            const double reach = 8.0 * worldPerPixel(m_host->markupCamera(), m_host->markupHeight(), 1.0);
-            const RadiusResult r = measureRadius(mesh, mark.points[0], triangle, std::max(reach, tolerance));
+            // El punto guardado ya esta sobre el circulo (clickMeasure): basta la tolerancia del modelo.
+            const RadiusResult r = measureRadius(mesh, mark.points[0], triangle, tolerance);
             if (!r.ok) {
                 v.error = widen(r.error);
                 break;

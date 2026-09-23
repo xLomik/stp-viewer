@@ -645,6 +645,25 @@ TEST(features_step_straight_edges_are_not_curves) {
     CHECK(!anyCurve);  // una caja solo tiene rectas
 }
 
+TEST(features_step_repeated_instance_keeps_circles_and_edges) {
+    // La misma pieza colocada dos veces (dos solidos sobre el mismo cascaron):
+    // cada copia tiene que tener sus circulos y aristas para medir.
+    std::string text = readText("tests/samples/placa_agujero.stp");
+    stp::Mesh single;
+    CHECK(loadStepText(text, &single));
+    const std::string rep = "(#228,#219),#224);";
+    const std::size_t at = text.find(rep);
+    CHECK(at != std::string::npos);
+    if (at == std::string::npos) return;
+    text.replace(at, rep.size(), "(#228,#219,#999998),#224);");
+    const std::size_t data = text.find("ENDSEC;", text.find("DATA;"));
+    text.insert(data, "#999998=MANIFOLD_SOLID_BREP('',#218);\n");
+    stp::Mesh twice;
+    CHECK(loadStepText(text, &twice));
+    CHECK(twice.features.circles.size() == 2 * single.features.circles.size());
+    CHECK(twice.edgeLines.size() == 2 * single.edgeLines.size());
+}
+
 TEST(features_step_units_inch) {
     std::string text = readText("tests/samples/caja.stp");
     const std::string mm = "( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )";
@@ -1242,6 +1261,21 @@ TEST(pick_finds_triangle_under_saved_point) {
     CHECK(pick.triangleAt(part, part.bounds.hi + stp::Vec3(50, 50, 50), 1e-6) == -1);
 }
 
+TEST(measure_radius_anchor_lies_on_circle) {
+    // El clic cae sobre la cuerda del circulo muestreado, no sobre el circulo:
+    // el punto que se guarda tiene que quedar sobre el circulo exacto.
+    stp::Mesh drawing;
+    CHECK(loadDxfText(entities({{0, "CIRCLE"}, {10, "3"}, {20, "4"}, {40, "5"}}), &drawing));
+    const stp::Vec3 onChord(3 + 4.99, 4 + 0.05, 0);
+    const stp::RadiusResult r = stp::measureRadius(drawing, onChord, -1, 0.1);
+    CHECK(r.ok);
+    const stp::Vec3 anchor = stp::radiusAnchor(r, onChord);
+    CHECK_NEAR(stp::distance(anchor, stp::Vec3(3, 4, 0)), 5.0, 1e-12);
+    const stp::RadiusResult again = stp::measureRadius(drawing, anchor, -1, 1e-9);
+    CHECK(again.ok);
+    CHECK_NEAR(again.radius, 5.0, 1e-12);
+}
+
 TEST(measure_formatting) {
     CHECK(stp::formatNumber(220.0, 3) == "220");
     CHECK(stp::formatNumber(12.5, 3) == "12.5");
@@ -1355,6 +1389,16 @@ TEST(markup_tolerates_damaged_and_future_files) {
     stp::MarkupDocument other;
     CHECK(!stp::parseMarkup("hola\nmundo\n", &other).recognized);
     CHECK(other.marks.empty());
+}
+
+TEST(markup_accepts_utf8_bom) {
+    // El Bloc de notas guarda UTF-8 con BOM: el archivo sigue siendo de marcas.
+    const std::string text = "\xEF\xBB\xBF" + stp::serializeMarkup(sampleMarkup());
+    stp::MarkupDocument back;
+    const stp::MarkupParseReport report = stp::parseMarkup(text, &back);
+    CHECK(report.recognized);
+    CHECK(report.badLines == 0);
+    CHECK(back.marks.size() == sampleMarkup().marks.size());
 }
 
 TEST(markup_detects_changed_model) {

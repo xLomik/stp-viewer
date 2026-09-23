@@ -135,6 +135,10 @@ private:
 
     void loadMarks();
     std::wstring m_path;  // vacio en el panel: ahi no hay ruta
+    // El .marcas existe pero no se pudo leer (bloqueado) o no se reconoce: no se
+    // borra nunca y, si no se pudo leer, tampoco se sobrescribe.
+    bool m_marksUnreadable = false;
+    bool m_marksForeign = false;
     std::unique_ptr<MarkupTools> m_tools;
     std::shared_ptr<PickIndex> m_pick;
     std::function<void()> m_markupListener;

@@ -108,6 +108,7 @@ bool addViewPage(stp::PdfWriter* pdf, const stp::Camera& camera, const std::stri
 
 void exportMarkup(HWND frame) {
     if (!g_view || !g_view->tools() || g_currentFile.empty()) return;
+    g_view->tools()->commitPendingEdit();
     std::wstring base = g_currentFile;
     const std::size_t dot = base.find_last_of(L'.');
     if (dot != std::wstring::npos) base = base.substr(0, dot);
@@ -167,10 +168,13 @@ void exportMarkup(HWND frame) {
 
 void openFile(HWND frame, const std::wstring& path) {
     if (!g_view) return;
+    std::wstring problem;
+    if (!g_view->saveMarks(&problem)) {
+        const std::wstring question = problem + L"\n\nSi abres otro archivo, esas marcas se pierden. \u00BFAbrir de todos modos?";
+        if (MessageBoxW(frame, question.c_str(), L"stp-viewer", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    }
     g_currentFile = path;
     SetWindowTextW(frame, (fileNameOf(path) + L" - stp-viewer").c_str());
-    std::wstring problem;
-    if (!g_view->saveMarks(&problem)) MessageBoxW(frame, problem.c_str(), L"stp-viewer", MB_ICONWARNING);
     g_view->loadFile(path);
     g_view->focus();
 }

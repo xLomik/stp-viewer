@@ -389,6 +389,7 @@ RadiusResult measureRadius(const Mesh& mesh, const Vec3& point, int triangle, do
             result.radius = c.radius;
             result.center = c.center;
             result.normal = c.normal;
+            result.onCircle = true;
         }
     }
     if (result.ok) return result;
@@ -410,6 +411,14 @@ RadiusResult measureRadius(const Mesh& mesh, const Vec3& point, int triangle, do
                        ? "Este formato no guarda circulos; usa distancia"
                        : "No hay un circulo aqui";
     return result;
+}
+
+Vec3 radiusAnchor(const RadiusResult& result, const Vec3& point) {
+    if (!result.ok || !result.onCircle) return point;
+    const Vec3 d = point - result.center;
+    const Vec3 inPlane = d - result.normal * dot(d, result.normal);
+    if (length(inPlane) < 1e-300) return point;
+    return result.center + normalize(inPlane) * result.radius;
 }
 
 double contourArea(const ContourFeature& c) {
