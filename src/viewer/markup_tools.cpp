@@ -1080,4 +1080,36 @@ void MarkupTools::draw(HDC dc, const Camera& camera, int width, int height, doub
     if (isMeasureTool() || (m_tool == Tool::Note && !m_noteAnchored)) drawSnap(&g, scale);
 }
 
+std::vector<std::pair<int, std::wstring>> MarkupTools::listEntries() const {
+    std::vector<std::pair<int, std::wstring>> entries;
+    for (const MarkupView& view : m_doc.views) {
+        int count = 0;
+        for (const Mark& mark : m_doc.marks) count += mark.view == view.id ? 1 : 0;
+        entries.push_back({-view.id, widen(view.name) + L"  (" + std::to_wstring(count) + L")"});
+    }
+    for (const Mark& mark : m_doc.marks) {
+        entries.push_back({mark.id, (mark.view ? L"    " : L"") + describe(mark)});
+    }
+    return entries;
+}
+
+void MarkupTools::focusEntry(int code) {
+    if (code < 0) {
+        if (const MarkupView* view = m_doc.findView(-code)) m_host->markupSetCamera(view->camera);
+        return;
+    }
+    const auto it = std::find_if(m_doc.marks.begin(), m_doc.marks.end(), [&](const Mark& m) { return m.id == code; });
+    if (it == m_doc.marks.end() || it->points.empty()) return;
+    if (it->view) {
+        if (const MarkupView* view = m_doc.findView(it->view)) m_host->markupSetCamera(view->camera);
+    } else {
+        // Centra la marca sin cambiar el zoom ni la orientacion.
+        Camera camera = m_host->markupCamera();
+        const Vec3 shift = it->points[0] - camera.target;
+        camera.target = camera.target + camera.right() * dot(shift, camera.right()) + camera.up() * dot(shift, camera.up());
+        m_host->markupSetCamera(camera);
+    }
+    select(code);
+}
+
 }  // namespace stp

@@ -53,6 +53,9 @@ public:
     void markSaved() { m_dirty = false; }
     void showMessage(const std::wstring& text, unsigned milliseconds = 4000);
     std::wstring describe(const Mark& mark) const;
+    // Para la lista lateral: (id de marca, texto) o (-id de vista, texto).
+    std::vector<std::pair<int, std::wstring>> listEntries() const;
+    void focusEntry(int code);
 
     void undo();
     void redo();

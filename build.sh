@@ -41,7 +41,7 @@ $CXX_WIN $FLAGS -shared -o dist/StepShellExt.dll \
 # Visor 3D.
 $WINDRES src/viewer/viewer.rc -O coff -o build/viewer.res
 $CXX_WIN $FLAGS -municode -o dist/stpviewer.exe \
-    src/viewer/main.cpp src/viewer/scene_view.cpp src/viewer/image_view.cpp src/viewer/text_overlay.cpp src/viewer/markup_tools.cpp $ENGINE build/viewer.res \
+    src/viewer/main.cpp src/viewer/toolbar.cpp src/viewer/scene_view.cpp src/viewer/image_view.cpp src/viewer/text_overlay.cpp src/viewer/markup_tools.cpp $ENGINE build/viewer.res \
     -mwindows $STATIC -lcomctl32 -lshlwapi -lole32 -loleaut32 -luuid -lgdi32 -luser32 \
     -lshell32 -lcomdlg32 -ladvapi32 -lgdiplus
 

@@ -5,8 +5,10 @@
 #include <commdlg.h>
 
 #include <string>
+#include <vector>
 
 #include "scene_view.h"
+#include "toolbar.h"
 
 namespace {
 
@@ -16,6 +18,44 @@ std::wstring g_currentFile;
 std::wstring fileNameOf(const std::wstring& path) {
     const size_t slash = path.find_last_of(L"\\/");
     return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+int GetDpiForWindowSafe(HWND hwnd) {
+    HDC dc = GetDC(hwnd);
+    const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+    if (dc) ReleaseDC(hwnd, dc);
+    return dpi;
+}
+
+stp::Toolbar g_toolbar;
+HWND g_list = nullptr;
+bool g_listVisible = false;
+std::vector<int> g_listCodes;
+
+void layout(HWND frame) {
+    RECT client;
+    GetClientRect(frame, &client);
+    const int bar = g_toolbar.hwnd() ? g_toolbar.width() : 0;
+    const int list = g_listVisible ? MulDiv(280, GetDpiForWindowSafe(frame), 96) : 0;
+    if (g_toolbar.hwnd()) MoveWindow(g_toolbar.hwnd(), 0, 0, bar, client.bottom, TRUE);
+    if (g_list) {
+        ShowWindow(g_list, g_listVisible ? SW_SHOW : SW_HIDE);
+        MoveWindow(g_list, client.right - list, 0, list, client.bottom, TRUE);
+    }
+    if (g_view && g_view->hwnd()) g_view->setRect(RECT{bar, 0, client.right - list, client.bottom});
+}
+
+void refreshList() {
+    if (!g_list || !g_view || !g_view->tools()) return;
+    SendMessageW(g_list, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(g_list, LB_RESETCONTENT, 0, 0);
+    g_listCodes.clear();
+    for (const auto& entry : g_view->tools()->listEntries()) {
+        SendMessageW(g_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(entry.second.c_str()));
+        g_listCodes.push_back(entry.first);
+    }
+    SendMessageW(g_list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(g_list, nullptr, TRUE);
 }
 
 void openFile(HWND frame, const std::wstring& path) {
@@ -56,12 +96,35 @@ void promptOpen(HWND frame) {
 LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
         case WM_SIZE:
-            if (g_view && g_view->hwnd()) {
-                RECT client;
-                GetClientRect(hwnd, &client);
-                g_view->setRect(client);
-            }
+            layout(hwnd);
             return 0;
+
+        case WM_COMMAND: {
+            const int command = LOWORD(wparam);
+            if (reinterpret_cast<HWND>(lparam) == g_list && HIWORD(wparam) == LBN_SELCHANGE) {
+                const LRESULT index = SendMessageW(g_list, LB_GETCURSEL, 0, 0);
+                if (index >= 0 && static_cast<std::size_t>(index) < g_listCodes.size() && g_view && g_view->tools()) {
+                    g_view->tools()->focusEntry(g_listCodes[static_cast<std::size_t>(index)]);
+                    g_view->focus();
+                }
+                return 0;
+            }
+            if (!g_view || !g_view->tools()) return 0;
+            if (command >= stp::kCommandTool && command <= stp::kCommandTool + static_cast<int>(stp::Tool::Pen)) {
+                g_view->tools()->setTool(static_cast<stp::Tool>(command - stp::kCommandTool));
+            } else if (command == stp::kCommandColor) {
+                g_view->tools()->cycleColor();
+            } else if (command == stp::kCommandList) {
+                g_listVisible = !g_listVisible;
+                layout(hwnd);
+            } else if (command == stp::kCommandSave) {
+                SendMessageW(hwnd, WM_KEYDOWN, 'S', 0);  // mismo camino que Ctrl+S
+            } else if (command == stp::kCommandExport) {
+                SendMessageW(hwnd, WM_KEYDOWN, 'E', 0);  // Task 11
+            }
+            g_view->focus();
+            return 0;
+        }
 
         case WM_SETFOCUS:
             if (g_view) g_view->focus();
@@ -77,7 +140,12 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_KEYDOWN:
-            if (wparam == 'S' && GetKeyState(VK_CONTROL) < 0 && g_view && g_view->tools()) {
+            if (wparam == VK_F2) {
+                g_listVisible = !g_listVisible;
+                layout(hwnd);
+                return 0;
+            }
+            if (wparam == 'S' && (GetKeyState(VK_CONTROL) < 0 || lparam == 0) && g_view && g_view->tools()) {
                 std::wstring problem;
                 const bool saved = g_view->saveMarks(&problem);
                 g_view->tools()->showMessage(saved ? L"Marcas guardadas" : problem);
@@ -142,7 +210,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     g_view = &view;
     view.setBudget(120000);
     view.enableTools(true);
-    view.setMarkupListener([frame]() { updateTitle(frame); });
+    g_toolbar.create(instance, frame);
+    g_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+                             WS_CHILD | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, 0, 0, 10, 10, frame,
+                             nullptr, instance, nullptr);
+    SendMessageW(g_list, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+    layout(frame);
+    view.setMarkupListener([frame]() {
+        updateTitle(frame);
+        if (g_view && g_view->tools()) g_toolbar.setState(g_view->tools()->tool(), g_view->tools()->color());
+        refreshList();
+    });
     if (!view.create(instance, frame, client)) return 1;
 
     ShowWindow(frame, showCmd);
@@ -161,6 +239,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
             // Ctrl+O y Escape los atiende el marco aunque el foco este en la vista.
             if ((msg.wParam == 'O' && GetKeyState(VK_CONTROL) < 0) ||
                 (msg.wParam == 'S' && GetKeyState(VK_CONTROL) < 0) ||
+                msg.wParam == VK_F2 ||
                 (msg.wParam == VK_ESCAPE && !view.toolActive())) {
                 SendMessageW(frame, WM_KEYDOWN, msg.wParam, msg.lParam);
                 continue;
