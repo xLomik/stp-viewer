@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <functional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -581,6 +583,72 @@ TEST(features_dxf_units_from_insunits) {
                           entities({{0, "LINE"}, {10, "0"}, {20, "0"}, {11, "1"}, {21, "0"}}),
                       &meters));
     CHECK(meters.units == stp::LengthUnit::Meter);
+}
+
+namespace {
+
+std::string readText(const char* path) {
+    std::ifstream file(path, std::ios::binary);
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+bool loadStepText(const std::string& text, stp::Mesh* mesh) {
+    std::string error;
+    return stp::loadModel(text.data(), text.size(), ".stp", mesh, &error);
+}
+
+}  // namespace
+
+TEST(features_step_hole_is_exact) {
+    stp::Mesh mesh;
+    CHECK(loadStepText(readText("tests/samples/placa_agujero.stp"), &mesh));
+    CHECK(mesh.units == stp::LengthUnit::Millimeter);
+    int holeEdges = 0;
+    for (const stp::CircleFeature& c : mesh.features.circles) {
+        if (std::fabs(c.radius - 10.0) < 1e-9) ++holeEdges;
+    }
+    CHECK(holeEdges >= 2);  // borde de arriba y de abajo del agujero
+    bool cylinder = false;
+    for (const stp::FaceFeature& f : mesh.features.faces) {
+        if (f.kind == stp::SurfaceKind::Cylinder && std::fabs(f.radius - 10.0) < 1e-9) cylinder = true;
+    }
+    CHECK(cylinder);
+}
+
+TEST(features_step_faces_cover_every_triangle_once) {
+    stp::Mesh mesh;
+    CHECK(loadStepText(readText("tests/samples/placa_agujero.stp"), &mesh));
+    std::uint32_t next = 0;
+    bool ordered = true;
+    for (const stp::FaceFeature& f : mesh.features.faces) {
+        if (f.firstTriangle != next || f.triangleCount == 0) ordered = false;
+        next = f.firstTriangle + f.triangleCount;
+    }
+    CHECK(ordered);
+    CHECK(next == mesh.triangleCount());
+}
+
+TEST(features_step_straight_edges_are_not_curves) {
+    stp::Mesh mesh;
+    CHECK(loadStepText(readText("tests/samples/caja.stp"), &mesh));
+    CHECK(mesh.edgeCurve.size() == mesh.edgeLines.size() / 2);
+    bool anyCurve = false;
+    for (const std::uint8_t c : mesh.edgeCurve) anyCurve = anyCurve || c != 0;
+    CHECK(!anyCurve);  // una caja solo tiene rectas
+}
+
+TEST(features_step_units_inch) {
+    std::string text = readText("tests/samples/caja.stp");
+    const std::string mm = "( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )";
+    const std::size_t at = text.find(mm);
+    CHECK(at != std::string::npos);
+    if (at == std::string::npos) return;
+    text.replace(at, mm.size(), "( CONVERSION_BASED_UNIT('INCH',#999999) LENGTH_UNIT() NAMED_UNIT(*) )");
+    stp::Mesh mesh;
+    CHECK(loadStepText(text, &mesh));
+    CHECK(mesh.units == stp::LengthUnit::Inch);
 }
 
 // --- Planaridad ----------------------------------------------------------------

@@ -1,6 +1,7 @@
 #include "step_model.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <unordered_map>
 #include <unordered_set>
@@ -119,6 +120,10 @@ private:
     void emitItem(const Entity* item, const Mat4& xf, int depth);
     void buildShell(const Entity* shell, const Mat4& xf);
     void buildFace(const Entity* face, const Mat4& xf);
+    void buildFaceTriangles(const Entity* face, const Mat4& xf, Surface* surface, bool* known);
+    const Entity* basisCurve(const Entity* curve) const;
+    void noteCircle(const Entity* edge, const Mat4& xf);
+    void detectUnits();
     void emitCurveSet(const Entity* set, const Mat4& xf);
 
     bool loopPoints(const Entity* loop, std::vector<Vec3>* pts, const Mat4& xf);
@@ -366,8 +371,10 @@ void Builder::emitCurveSet(const Entity* set, const Mat4& xf) {
         if (!c) continue;
         std::vector<Vec3> pts;
         sampleCurve(c, Vec3(), Vec3(), true, &pts);
+        const Entity* basis = basisCurve(c);
+        const bool curved = basis && !basis->is("LINE") && !basis->is("POLYLINE");
         for (std::size_t i = 1; i < pts.size(); ++i) {
-            M.addSegment(xf.point(pts[i - 1]), xf.point(pts[i]));
+            M.addSegment(xf.point(pts[i - 1]), xf.point(pts[i]), curved);
         }
     }
 }
@@ -409,6 +416,95 @@ const std::vector<Vec3>* Builder::edgePoints(const Entity* edge) {
         pts.push_back(p1);
     }
     return &m_edgeCache.emplace(edge->id, std::move(pts)).first->second;
+}
+
+// La curva geometrica que hay debajo de SURFACE_CURVE, SEAM_CURVE y compania.
+const Entity* Builder::basisCurve(const Entity* curve) const {
+    for (int depth = 0; curve && depth < 4; ++depth) {
+        if (!curve->is("SURFACE_CURVE") && !curve->is("SEAM_CURVE") &&
+            !curve->is("INTERSECTION_CURVE") && !curve->is("TRIMMED_CURVE")) {
+            return curve;
+        }
+        const std::vector<Value>& p = curve->params();
+        if (p.size() < 2) return nullptr;
+        curve = res(p[1]);
+    }
+    return curve;
+}
+
+// Registra la arista como circulo exacto si su curva es CIRCLE. Los angulos se
+// calculan igual que en sampleCurve para que el arco coincida con lo dibujado.
+void Builder::noteCircle(const Entity* edge, const Mat4& xf) {
+    const std::vector<Value>& p = edge->params();
+    if (p.size() < 4) return;
+    const Entity* curve = basisCurve(res(p[3]));
+    if (!curve || !curve->is("CIRCLE")) return;
+    const std::vector<Value>& cp = curve->params();
+    Frame f;
+    if (cp.size() < 3 || !frameOf(cp[1], &f)) return;
+    const double radius = numOf(cp, 2, 0.0);
+    if (radius <= 0) return;
+
+    Vec3 p0, p1;
+    const bool hasStart = p.size() > 1 && vertexPoint(p[1], &p0);
+    const bool hasEnd = p.size() > 2 && vertexPoint(p[2], &p1);
+    const bool sameSense = p.size() > 4 ? p[4].boolValue() : true;
+    auto angleOf = [&](const Vec3& q) {
+        const Vec3 d = q - f.origin;
+        return std::atan2(dot(d, f.y), dot(d, f.x));
+    };
+    double start = 0.0, sweep = 2 * kPi;
+    if (hasStart && hasEnd && distance(p0, p1) > std::max(m_weldTol, m_tol * 0.05)) {
+        start = angleOf(p0);
+        sweep = normalizeAngle(angleOf(p1) - start);
+        if (sameSense && sweep <= 0) sweep += 2 * kPi;
+        if (!sameSense && sweep >= 0) sweep -= 2 * kPi;
+    } else if (hasStart) {
+        start = angleOf(p0);
+        if (!sameSense) sweep = -2 * kPi;
+    }
+
+    CircleFeature circle;
+    circle.center = xf.point(f.origin);
+    circle.xAxis = normalize(xf.direction(f.x));
+    circle.normal = normalize(xf.direction(f.z));
+    circle.radius = radius * length(xf.direction(f.x));
+    circle.startAngle = start;
+    circle.sweep = sweep;
+    M.features.circles.push_back(circle);
+}
+
+// Unidad de longitud: el LENGTH_UNIT de menor numero (casi siempre hay uno solo).
+void Builder::detectUnits() {
+    int best = 0;
+    for (const auto& entry : F.entities()) {
+        const Entity& e = entry.second;
+        if (!e.part("LENGTH_UNIT") || (best != 0 && e.id > best)) continue;
+        LengthUnit unit = LengthUnit::Unknown;
+        if (const std::vector<Value>* si = e.part("SI_UNIT")) {
+            std::string prefix, name;
+            for (const Value& v : *si) {
+                if (v.kind != Value::Kind::Enum) continue;
+                if (v.text == "METRE") name = v.text;
+                else prefix = v.text;
+            }
+            if (name != "METRE") continue;
+            if (prefix == "MILLI") unit = LengthUnit::Millimeter;
+            else if (prefix == "CENTI") unit = LengthUnit::Centimeter;
+            else if (prefix.empty()) unit = LengthUnit::Meter;
+        } else if (const std::vector<Value>* conversion = e.part("CONVERSION_BASED_UNIT")) {
+            if (conversion->empty() || (*conversion)[0].kind != Value::Kind::String) continue;
+            std::string name = (*conversion)[0].text;
+            for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (name == "INCH") unit = LengthUnit::Inch;
+            else if (name == "FOOT") unit = LengthUnit::Foot;
+            else if (name == "MILLIMETRE" || name == "MILLIMETER") unit = LengthUnit::Millimeter;
+        } else {
+            continue;
+        }
+        best = e.id;
+        M.units = unit;
+    }
 }
 
 bool Builder::readBSpline(const Entity* curve, BSpline* out) const {
@@ -668,9 +764,14 @@ bool Builder::loopPoints(const Entity* loop, std::vector<Vec3>* pts, const Mat4&
         if (!sampled || sampled->size() < 2) continue;
 
         if (m_edgeEmitted.insert(edge->id).second) {
+            const std::vector<Value>& ep = edge->params();
+            const Entity* basis = ep.size() > 3 ? basisCurve(res(ep[3])) : nullptr;
+            // Solo las rectas ofrecen extremos y puntos medios para medir.
+            const bool curved = basis && !basis->is("LINE") && !basis->is("POLYLINE");
             for (std::size_t i = 1; i < sampled->size(); ++i) {
-                M.addSegment(xf.point((*sampled)[i - 1]), xf.point((*sampled)[i]));
+                M.addSegment(xf.point((*sampled)[i - 1]), xf.point((*sampled)[i]), curved);
             }
+            noteCircle(edge, xf);
         }
         if (orientation) {
             for (const Vec3& q : *sampled) appendUnique(pts, q, m_weldTol);
@@ -995,6 +1096,34 @@ void Builder::addTessellated(const Surface& surf, const std::vector<std::vector<
 }
 
 void Builder::buildFace(const Entity* face, const Mat4& xf) {
+    const std::size_t first = M.triangleCount();
+    Surface surface;
+    bool known = false;
+    buildFaceTriangles(face, xf, &surface, &known);
+    const std::size_t count = M.triangleCount() - first;
+    if (count == 0) return;
+
+    FaceFeature feature;
+    feature.firstTriangle = static_cast<std::uint32_t>(first);
+    feature.triangleCount = static_cast<std::uint32_t>(count);
+    feature.kind = SurfaceKind::Plane;  // sin superficie reconocida se malla como plano
+    if (known) {
+        switch (surface.type) {
+            case Surface::Type::Plane: feature.kind = SurfaceKind::Plane; break;
+            case Surface::Type::Cylinder: feature.kind = SurfaceKind::Cylinder; break;
+            case Surface::Type::Cone: feature.kind = SurfaceKind::Cone; break;
+            case Surface::Type::Sphere: feature.kind = SurfaceKind::Sphere; break;
+            case Surface::Type::Torus: feature.kind = SurfaceKind::Torus; break;
+            case Surface::Type::Freeform: feature.kind = SurfaceKind::Other; break;
+        }
+        feature.radius = surface.radius * length(xf.direction(surface.frame.x));
+        feature.axisOrigin = xf.point(surface.frame.origin);
+        feature.axisDir = normalize(xf.direction(surface.frame.z));
+    }
+    M.features.faces.push_back(feature);
+}
+
+void Builder::buildFaceTriangles(const Entity* face, const Mat4& xf, Surface* surface, bool* known) {
     if (outOfTime()) return;
     const std::vector<Value>& p = face->params();
     if (p.size() < 3 || !p[1].isList()) return;
@@ -1017,6 +1146,8 @@ void Builder::buildFace(const Entity* face, const Mat4& xf) {
         Surface full;
         if (surfaceOf(res(p[2]), &full)) {
             full.flipped = p.size() > 3 ? !p[3].boolValue() : false;
+            *surface = full;
+            *known = true;
             addFullSurface(full, xf);
         } else {
             ++M.facesFailed;
@@ -1044,6 +1175,8 @@ void Builder::buildFace(const Entity* face, const Mat4& xf) {
     Surface surf;
     if (surfaceOf(res(p[2]), &surf)) {
         surf.flipped = !sameSense;
+        *surface = surf;
+        *known = true;
         addTessellated(surf, loops, xf);
     } else {
         addPlanarFallback(loops, xf, !sameSense);
@@ -1051,6 +1184,7 @@ void Builder::buildFace(const Entity* face, const Mat4& xf) {
 }
 
 bool Builder::run(std::string* error, LoadStats* stats) {
+    detectUnits();
     estimateSize();
     collectInstances();
 
