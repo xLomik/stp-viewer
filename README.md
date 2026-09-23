@@ -57,6 +57,41 @@ No dependen de ningun kernel CAD externo: el lector de STEP, el mallador y el
 render estan escritos en el repositorio y se compilan a binarios estaticos de
 ~1 MB que no necesitan .NET ni Visual C++ Redistributable.
 
+## Medir y marcar
+
+En el visor hay una barra de herramientas a la izquierda. Con ella se puede
+**medir** y **marcar** una pieza o un plano, guardar las marcas junto al archivo
+y exportar la revisión para mandarla a un compañero.
+
+| Herramienta | Tecla | Cómo se usa |
+|---|---|---|
+| Distancia | `M` y `1` | Clic en dos puntos; se engancha a extremos, puntos medios y centros. Muestra el total y ΔX ΔY ΔZ |
+| Radio y diámetro | `M` y `2` | Clic sobre un círculo, un arco o un agujero |
+| Ángulo | `M` y `3` | Tres clics (vértice en el medio) o clic en dos líneas |
+| Área y perímetro | `M` y `4` | Clic dentro de un contorno cerrado del plano o sobre una cara de la pieza |
+| Resaltador | `H` | Arrastrar; `Q` cambia entre amarillo, verde y rosa |
+| Subrayado | `U` | Arrastrar; con `Shift` sale horizontal o vertical |
+| Nota con flecha | `N` | Clic en el punto a señalar, clic donde va el texto, escribir y `Enter` |
+| Rectángulo, elipse, nube | `R`, `E`, `C` | Arrastrar de esquina a esquina |
+| Lápiz | `L` | Trazo libre |
+| Color | `Q` | Rojo, amarillo, verde, azul, negro |
+
+- `Shift` mientras se mide: sin enganche. `Esc`: termina la herramienta.
+- Clic en una marca la selecciona; `Supr` la borra; doble clic en una nota
+  edita su texto. `Ctrl+Z` y `Ctrl+Y` deshacen y rehacen.
+- En un plano 2D las marcas se ven siempre. En una pieza 3D, las medidas y
+  las notas siguen a la pieza al girarla; los trazos y formas quedan en la
+  vista en que se dibujaron ("Vista 1", "Vista 2"...): al girar se ocultan y
+  `F2` abre la lista para volver a esa vista.
+- Las marcas se guardan solas al cerrar o al abrir otro archivo (y con
+  `Ctrl+S`) en `<archivo>.marcas`, al lado del modelo: si se copia la carpeta,
+  las marcas van con ella. Si el modelo cambia después de marcarlo, se avisa.
+- `Ctrl+E` exporta: **PDF** con la vista general, una página por cada vista
+  marcada y la tabla de medidas y notas; o **PNG** de la vista actual.
+- En el **panel de vista previa** se puede medir con `M` (sin barra); esas
+  medidas no se guardan. Windows no le dice al panel dónde está el archivo, así
+  que ahí no se ven las marcas guardadas.
+
 ## Instalacion
 
 1. Descarga o compila la carpeta `dist\`.
@@ -112,7 +147,11 @@ Los dos usan los mismos controles; el panel muestra una barra de ayuda mas corta
 | Vistas | `1` frente, `2` atras, `3` izquierda, `4` derecha, `5` superior, `6` inferior, `7` isometrica |
 | Plano 2D | `D` vuelve a verlo de frente; ahi arrastrar mueve y la rueda acerca hacia el cursor |
 | Alambre | `W` |
-| Aristas | `E` |
+| Aristas | `A` (en el panel tambien `E`) |
+| Medir | `M` (luego `1`-`4`) |
+| Marcar (solo visor) | `H` `U` `N` `R` `E` `C` `L`, color `Q` |
+| Lista de marcas | `F2` |
+| Guardar marcas / Exportar | `Ctrl+S` / `Ctrl+E` |
 | Perspectiva / ortografica | `P` |
 | Abrir archivo | `Ctrl+O`, o arrastrar el archivo a la ventana |
 
@@ -140,10 +179,11 @@ instalacion y tres herramientas de apoyo (`steprender`, `thumbtest`,
 ## Como esta hecho
 
 ```
-src/engine     lector ISO 10303-21, geometria, mallado, NURBS y deteccion de planos
+src/engine     lector ISO 10303-21, geometria, mallado, NURBS, deteccion de planos, medicion y marcas
 src/formats    IGES, DXF, STL, OBJ, PLY y extraccion de vistas previas
 src/render     rasterizador por software (z-buffer, luces, aristas)
 src/shellext   extensiones COM: miniatura y panel de vista previa
+src/export     escritor de PDF
 src/viewer     SceneView (vista 3D interactiva), textos de planos y el visor independiente
 src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
 ```
@@ -180,6 +220,12 @@ src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
 - De los formatos cerrados solo se muestra su imagen incrustada; si el archivo
   se guardo sin vista previa, no hay nada que ensenar.
 - El DXF binario no se lee; hay que guardarlo como DXF ASCII.
+- Las marcas de trazo y forma en 3D pertenecen a la vista en que se dibujaron;
+  no se proyectan sobre la superficie de la pieza.
+- STL, OBJ y PLY no guardan círculos: en esos formatos se mide distancia,
+  ángulo y área, pero no radio.
+- El PDF usa Helvetica con codificación Windows: los caracteres fuera del
+  alfabeto latino salen como `?`.
 - En los planos no se dibujan los rellenos de sombreado (`HATCH`) ni los tipos de
   linea (trazos, ejes); todo sale con linea continua de un solo color. Los
   textos usan Arial sin negrita ni cursiva y los `MTEXT` no se ajustan al ancho
