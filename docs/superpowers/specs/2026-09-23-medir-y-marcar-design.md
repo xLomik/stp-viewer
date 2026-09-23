@@ -184,6 +184,9 @@ guardadas.
   trazo tipo=resaltador vista=1 color=#FFE14D puntos=x,y,z;x,y,z;...
   forma tipo=nube vista=1 color=#E03C31 a=x,y,z b=x,y,z
   ```
+- `camara=` guarda todos los campos de `Camera`: `objetivo`, `distancia`,
+  `yaw`, `pitch`, `alto_orto`, `orto`, `plano` y, si es vista de plano,
+  `normal`, `derecha` y `arriba`. En la línea de ejemplo se abrevió con `...`.
 - Los valores medidos no se guardan: se recalculan de los puntos al abrir, así
   la medida no puede contradecir al modelo.
 - Guardado automático al cerrar o cambiar de archivo, y con `Ctrl+S`. Sin marcas,
