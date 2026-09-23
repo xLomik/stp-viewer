@@ -713,6 +713,51 @@ bool SceneView::saveMarks(std::wstring* message) {
     return ok;
 }
 
+HBITMAP SceneView::renderSnapshot(const Camera& camera, int width, int height, double scale) {
+    RenderStyle style = m_style;
+    style.supersample = 2;
+    style.edgeWidth *= scale;
+    Framebuffer frame;
+    renderMesh(m_mesh, camera, style, width, height, &frame);
+
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap || !bits) return nullptr;
+    memcpy(bits, frame.pixels.data(), frame.pixels.size() * sizeof(std::uint32_t));
+
+    HDC dc = CreateCompatibleDC(nullptr);
+    HGDIOBJ old = SelectObject(dc, bitmap);
+    drawMeshTexts(dc, m_mesh, camera, width, height, m_drawingColor);
+    if (m_tools) m_tools->draw(dc, camera, width, height, scale, false);
+    GdiFlush();
+    SelectObject(dc, old);
+    DeleteDC(dc);
+    // GDI deja el alfa en cero donde escribe; la imagen exportada es opaca.
+    auto* pixels = static_cast<std::uint32_t*>(bits);
+    for (std::size_t i = 0; i < frame.pixels.size(); ++i) pixels[i] |= 0xFF000000u;
+    return bitmap;
+}
+
+Camera SceneView::overviewCamera(double aspect) const {
+    Camera camera = m_camera;
+    if (m_plan2d) {
+        camera.fitPlanar(m_planar, aspect, 1.06);
+    } else {
+        camera.planView = false;
+        camera.yaw = -0.7853981634;
+        camera.pitch = 0.5235987756;
+        camera.fit(m_mesh.bounds, aspect);
+    }
+    return camera;
+}
+
 void SceneView::enableTools(bool editing) {
     m_toolsEnabled = true;
     m_tools = std::make_unique<MarkupTools>(this, editing);

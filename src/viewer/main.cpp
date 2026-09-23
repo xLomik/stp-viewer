@@ -3,12 +3,17 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <commdlg.h>
+#include <lmcons.h>
 
+#include <cstdio>
+#include <cwchar>
 #include <string>
 #include <vector>
 
 #include "scene_view.h"
 #include "toolbar.h"
+#include "export.h"
+#include "../export/pdf_writer.h"
 
 namespace {
 
@@ -56,6 +61,108 @@ void refreshList() {
     }
     SendMessageW(g_list, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(g_list, nullptr, TRUE);
+}
+
+std::string utf8(const std::wstring& text) {
+    if (text.empty()) return std::string();
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), &out[0], size, nullptr, nullptr);
+    return out;
+}
+
+bool writeBytes(const std::wstring& path, const std::string& bytes) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
+                    written == bytes.size();
+    CloseHandle(file);
+    return ok;
+}
+
+std::string footerLine() {
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    wchar_t user[UNLEN + 1] = {};
+    DWORD length = UNLEN + 1;
+    GetUserNameW(user, &length);
+    char date[32];
+    std::snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
+    return utf8(fileNameOf(g_currentFile)) + "  \xE2\x80\x94  " + date + "  \xE2\x80\x94  " + utf8(user);
+}
+
+// Pagina con una vista: imagen de 1540x1000 px en 770x500 pt, titulo arriba y pie.
+bool addViewPage(stp::PdfWriter* pdf, const stp::Camera& camera, const std::string& title, int pageNumber) {
+    const int pw = 1540, ph = 1000;
+    HBITMAP bitmap = g_view->renderSnapshot(camera, pw, ph, 2.0);
+    if (!bitmap) return false;
+    std::vector<std::uint8_t> jpeg;
+    const bool ok = stp::encodeJpeg(bitmap, 90, &jpeg);
+    DeleteObject(bitmap);
+    if (!ok) return false;
+    pdf->addPage(jpeg, pw, ph, 36, 52, 770, 500,
+                 {{36, 566, 14, title, true}, {36, 24, 8, footerLine() + "  \xE2\x80\x94  p. " + std::to_string(pageNumber), false}});
+    return true;
+}
+
+void exportMarkup(HWND frame) {
+    if (!g_view || !g_view->tools() || g_currentFile.empty()) return;
+    std::wstring base = g_currentFile;
+    const std::size_t dot = base.find_last_of(L'.');
+    if (dot != std::wstring::npos) base = base.substr(0, dot);
+    wchar_t path[MAX_PATH] = {};
+    wcsncpy(path, (fileNameOf(base) + L"-revision.pdf").c_str(), MAX_PATH - 1);
+    OPENFILENAMEW dialog = {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = frame;
+    dialog.lpstrFilter = L"PDF con todas las vistas (*.pdf)\0*.pdf\0Imagen de esta vista (*.png)\0*.png\0";
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = L"pdf";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetSaveFileNameW(&dialog)) return;
+
+    std::wstring target = path;
+    const bool png = dialog.nFilterIndex == 2 || (target.size() > 4 && _wcsicmp(target.c_str() + target.size() - 4, L".png") == 0);
+    bool ok = false;
+    if (png) {
+        if (_wcsicmp(target.c_str() + std::max<std::size_t>(target.size(), 4) - 4, L".png") != 0) target += L".png";
+        RECT client;
+        GetClientRect(g_view->hwnd(), &client);
+        HBITMAP bitmap = g_view->renderSnapshot(g_view->camera(), 2 * client.right, 2 * client.bottom, 2.0);
+        ok = bitmap && stp::savePng(bitmap, target);
+        if (bitmap) DeleteObject(bitmap);
+    } else {
+        stp::PdfWriter pdf;
+        const double aspect = 1540.0 / 1000.0;
+        int page = 1;
+        ok = addViewPage(&pdf, g_view->overviewCamera(aspect), "Vista general", page++);
+        const stp::MarkupDocument& doc = g_view->tools()->document();
+        for (const stp::MarkupView& view : doc.views) {
+            stp::Camera camera = view.camera;
+            ok = ok && addViewPage(&pdf, camera, view.name, page++);
+        }
+        // Tabla de medidas y notas, 34 renglones por pagina.
+        std::vector<std::string> rows;
+        int n = 1;
+        for (const stp::Mark& mark : doc.marks) {
+            if (!stp::isMeasurement(mark.kind) && mark.kind != stp::MarkKind::Note) continue;
+            std::string row = std::to_string(n++) + ".  " + utf8(g_view->tools()->describe(mark));
+            for (char& c : row) if (c == '\n') c = ' ';
+            rows.push_back(row);
+        }
+        for (std::size_t start = 0; start < rows.size(); start += 34) {
+            std::vector<stp::PdfText> texts = {{36, 566, 14, "Medidas y notas", true}};
+            for (std::size_t i = start; i < rows.size() && i < start + 34; ++i) {
+                texts.push_back({36, 536 - 14.5 * static_cast<double>(i - start), 10, rows[i], false});
+            }
+            texts.push_back({36, 24, 8, footerLine() + "  \xE2\x80\x94  p. " + std::to_string(page++), false});
+            pdf.addPage({}, 0, 0, 0, 0, 0, 0, texts);
+        }
+        ok = ok && writeBytes(target, pdf.finish());
+    }
+    g_view->tools()->showMessage(ok ? L"Exportado: " + fileNameOf(target) : L"No se pudo exportar");
 }
 
 void openFile(HWND frame, const std::wstring& path) {
@@ -140,6 +247,10 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_KEYDOWN:
+            if (wparam == 'E' && (GetKeyState(VK_CONTROL) < 0 || lparam == 0)) {
+                exportMarkup(hwnd);
+                return 0;
+            }
             if (wparam == VK_F2) {
                 g_listVisible = !g_listVisible;
                 layout(hwnd);
@@ -240,6 +351,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
             if ((msg.wParam == 'O' && GetKeyState(VK_CONTROL) < 0) ||
                 (msg.wParam == 'S' && GetKeyState(VK_CONTROL) < 0) ||
                 msg.wParam == VK_F2 ||
+                (msg.wParam == 'E' && GetKeyState(VK_CONTROL) < 0) ||
                 (msg.wParam == VK_ESCAPE && !view.toolActive())) {
                 SendMessageW(frame, WM_KEYDOWN, msg.wParam, msg.lParam);
                 continue;

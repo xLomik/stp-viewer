@@ -345,6 +345,8 @@ LRESULT CALLBACK MarkupTools::editProc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
         PostMessageW(self->m_host->markupWindow(), kNoteCommit, 0, 0);
         return 0;
     }
+    // El Enter que confirma tambien llega como caracter: no debe quedar en el texto.
+    if (msg == WM_CHAR && (wparam == L'\r' || wparam == 27) && (wparam == 27 || GetKeyState(VK_SHIFT) >= 0)) return 0;
     if (msg == WM_KILLFOCUS) PostMessageW(self->m_host->markupWindow(), kNoteCommit, 1, 0);
     return CallWindowProcW(self->m_editDefault, hwnd, msg, wparam, lparam);
 }
@@ -384,6 +386,7 @@ void MarkupTools::closeNoteEditor(bool commit) {
     if (it != m_doc.marks.end()) {
         std::string utf8 = narrow(text);
         utf8.erase(std::remove(utf8.begin(), utf8.end(), '\r'), utf8.end());
+        while (!utf8.empty() && (utf8.back() == '\n' || utf8.back() == ' ')) utf8.pop_back();
         if (commit && !utf8.empty()) {
             // Una nota nueva ya guardo su paso de deshacer al crearse; editar una
             // existente guarda uno nuevo.

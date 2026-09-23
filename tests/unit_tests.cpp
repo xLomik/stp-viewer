@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <random>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "../src/engine/markup.h"
+#include "../src/export/pdf_writer.h"
 #include "../src/engine/measure.h"
 #include "../src/engine/nurbs.h"
 #include "../src/formats/formats.h"
@@ -1387,6 +1389,42 @@ TEST(markup_views_match_within_half_percent) {
     CHECK(stp::markVisible(stroke, doc, doc.views[0].camera));
     CHECK(!stp::markVisible(stroke, doc, a));
     CHECK(stp::markVisible(doc.marks[0], doc, a));  // las medidas se ven siempre
+}
+
+// --- PDF --------------------------------------------------------------------------------
+
+TEST(pdf_structure_has_valid_xref) {
+    stp::PdfWriter pdf;
+    const std::vector<std::uint8_t> fakeJpeg = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0xFF, 0xD9};
+    pdf.addPage(fakeJpeg, 4, 3, 36, 48, 770, 500, {{36, 570, 14, "Vista general", true}});
+    pdf.addPage({}, 0, 0, 0, 0, 0, 0, {{36, 560, 10, "Medidas y notas", false}});
+    CHECK(pdf.pageCount() == 2);
+    const std::string file = pdf.finish();
+    CHECK(file.compare(0, 8, "%PDF-1.4") == 0);
+    CHECK(file.find("/Count 2") != std::string::npos);
+    CHECK(file.find("/Filter /DCTDecode") != std::string::npos);
+
+    const std::size_t startxref = file.rfind("startxref");
+    CHECK(startxref != std::string::npos);
+    if (startxref == std::string::npos) return;
+    const std::size_t xref = std::strtoul(file.c_str() + startxref + 10, nullptr, 10);
+    CHECK(file.compare(xref, 4, "xref") == 0);
+    // "xref\n0 N\n" y una entrada de 20 bytes por objeto.
+    const std::size_t countAt = file.find('\n', xref) + 1;
+    const int objects = std::atoi(file.c_str() + countAt + 2);
+    CHECK(objects >= 8);  // catalogo, paginas, 2 fuentes, 2 paginas, 2 contenidos, 1 imagen
+    const std::size_t entries = file.find('\n', countAt) + 1;
+    for (int k = 1; k < objects; ++k) {
+        const std::size_t offset = std::strtoul(file.c_str() + entries + 20 * k, nullptr, 10);
+        CHECK(file.compare(offset, std::to_string(k).size() + 6, std::to_string(k) + " 0 obj") == 0);
+    }
+}
+
+TEST(pdf_text_is_winansi_and_escaped) {
+    CHECK(stp::utf8ToWinAnsi("\xC3\x98 \xC3\xB1 \xE2\x82\xAC \xE2\x80\x94 \xE4\xB8\xAD") == "\xD8 \xF1 \x80 \x97 ?");
+    stp::PdfWriter pdf;
+    pdf.addPage({}, 0, 0, 0, 0, 0, 0, {{10, 10, 10, "a(b)c\\", false}});
+    CHECK(pdf.finish().find("(a\\(b\\)c\\\\) Tj") != std::string::npos);
 }
 
 int main() {

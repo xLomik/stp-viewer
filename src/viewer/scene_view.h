@@ -52,6 +52,10 @@ public:
     bool saveMarks(std::wstring* message);
     const std::wstring& path() const { return m_path; }
     const Camera& camera() const { return m_camera; }
+    // Render sin pantalla con textos y marcas, para exportar. El llamante libera el HBITMAP.
+    HBITMAP renderSnapshot(const Camera& camera, int width, int height, double scale);
+    // Vista general: el plano de frente o la pieza en isometrica, encuadrada.
+    Camera overviewCamera(double aspect) const;
     bool toolActive() const { return m_tools && m_tools->active(); }
     void setMarkupListener(std::function<void()> listener) { m_markupListener = std::move(listener); }
 
