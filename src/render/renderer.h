@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../engine/mesh.h"
+#include "../engine/planar.h"
 
 namespace stp {
 
@@ -19,6 +20,13 @@ struct Camera {
     double orthoHeight = 10.0;
     bool ortho = true;
 
+    // Vista de plano: mira de frente a un dibujo 2D con ejes fijos, sin orbita
+    // ni el pequeno giro que obliga el limite de pitch.
+    bool planView = false;
+    Vec3 planNormal{0, 0, 1};  // hacia el observador
+    Vec3 planRight{1, 0, 0};
+    Vec3 planUp{0, 1, 0};
+
     Vec3 eye() const;
     Vec3 forward() const;
     Vec3 right() const;
@@ -26,6 +34,10 @@ struct Camera {
 
     // Frames the box for the given viewport aspect (width / height).
     void fit(const BBox& box, double aspect, double margin = 1.08);
+    // Pasa a vista de plano y encuadra el rectangulo del dibujo.
+    void fitPlanar(const PlanarInfo& info, double aspect, double margin = 1.05);
+    // Zoom ortografico que deja quieto el punto que esta bajo el cursor.
+    void zoomAt(double factor, double sx, double sy, int width, int height);
 };
 
 struct RenderStyle {

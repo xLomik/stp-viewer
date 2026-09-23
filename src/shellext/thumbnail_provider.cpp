@@ -2,6 +2,7 @@
 
 #include <shlwapi.h>
 
+#include <algorithm>
 #include <new>
 #include <cctype>
 #include <string>
@@ -9,6 +10,7 @@
 
 #include "../formats/formats.h"
 #include "../viewer/image_view.h"
+#include "../viewer/text_overlay.h"
 #include "../render/renderer.h"
 
 const CLSID CLSID_StepThumbnailProvider = {
@@ -149,12 +151,25 @@ HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP*
 
     stp::Camera camera;
     camera.ortho = true;
-    camera.fit(mesh.bounds, 1.0);
-
     stp::RenderStyle style;
-    style.transparentBackground = true;
     style.supersample = size >= 256 ? 2 : 3;
-    style.edgeWidth = size >= 96 ? 1.1 : 0.9;
+
+    const stp::PlanarInfo planar = stp::detectPlanar(mesh);
+    if (planar.planar) {
+        // Plano 2D: de frente, en una hoja blanca opaca que se lee igual con el
+        // tema claro que con el oscuro, y con lineas oscuras algo mas gruesas.
+        camera.fitPlanar(planar, 1.0, 1.06);
+        style.transparentBackground = false;
+        style.backgroundTop = 0xFFFFFFFF;
+        style.backgroundBottom = 0xFFFFFFFF;
+        style.edgeColor = 0xFF1A2027;
+        style.faceColor = 0xFFD3D9DF;
+        style.edgeWidth = std::min(2.5, std::max(1.2, size / 170.0));
+    } else {
+        camera.fit(mesh.bounds, 1.0);
+        style.transparentBackground = true;
+        style.edgeWidth = size >= 96 ? 1.1 : 0.9;
+    }
 
     stp::Framebuffer frame;
     stp::renderMesh(mesh, camera, style, static_cast<int>(size), static_cast<int>(size), &frame);
@@ -172,6 +187,21 @@ HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP*
     if (!bitmap || !bits) return E_OUTOFMEMORY;
 
     memcpy(bits, frame.pixels.data(), frame.pixels.size() * sizeof(std::uint32_t));
+
+    if (planar.planar && !mesh.texts.empty()) {
+        HDC dc = CreateCompatibleDC(nullptr);
+        if (dc) {
+            HGDIOBJ old = SelectObject(dc, bitmap);
+            stp::drawMeshTexts(dc, mesh, camera, static_cast<int>(size), static_cast<int>(size),
+                               RGB(0x1A, 0x20, 0x27));
+            GdiFlush();
+            SelectObject(dc, old);
+            DeleteDC(dc);
+            // GDI deja el alfa en cero donde escribe; la hoja es opaca.
+            std::uint32_t* pixels = static_cast<std::uint32_t*>(bits);
+            for (std::size_t i = 0; i < frame.pixels.size(); ++i) pixels[i] |= 0xFF000000u;
+        }
+    }
     *out = bitmap;
     return S_OK;
 }

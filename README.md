@@ -15,7 +15,7 @@ interactivo** y un visor 3D independiente.
 |---|---|---|
 | STEP | `.stp` `.step` | Solido completo, mallado exacto de plano, cilindro, cono, esfera y toro |
 | IGES | `.igs` `.iges` | Solidos B-rep y superficies recortadas, con sus aristas |
-| DXF | `.dxf` | Lineas, polilineas 2D y 3D, arcos, circulos, `3DFACE`, mallas de caras y bloques |
+| DXF | `.dxf` | Planos 2D completos: lineas, polilineas con arcos, circulos, elipses, splines, bloques, cotas y textos; tambien `3DFACE` y mallas en 3D |
 | Mallas | `.stl` `.obj` `.ply` | Triangulos con sombreado plano y realce de cantos |
 | Cerrados | `.dwg` `.prt` `.sldprt` `.sldasm` `.ipt` `.iam` `.catpart` | La imagen de vista previa que el CAD guardo dentro del archivo |
 
@@ -25,6 +25,33 @@ fabricante o una libreria con licencia incompatible. Lo que si se puede, y es lo
 que hace este programa, es sacar la imagen de vista previa que el propio CAD
 dejo incrustada al grabar: sirve para reconocer el archivo en la carpeta, pero
 no se puede girar.
+
+## Planos 2D
+
+La mayoria de los DXF son planos: todo esta en un mismo plano y, visto en
+isometrica como una pieza 3D, queda un enredo de lineas oscuras sobre fondo
+oscuro. Por eso cada archivo se revisa al abrirlo: si todos sus puntos (y los
+textos) caben en un plano —con una tolerancia de 0,1 % del tamano del dibujo,
+de modo que una arandela de 1 mm en 100 mm sigue siendo 3D— se trata como
+plano:
+
+- **Miniatura:** de frente, en una hoja blanca opaca con lineas oscuras, y con
+  los textos que se alcanzan a leer. Se ve igual con el tema claro que con el
+  oscuro del Explorador.
+- **Visor y panel:** de frente, lineas claras sobre fondo oscuro (oscuras si el
+  panel usa tema claro), la etiqueta *Plano 2D ancho x alto* y navegacion de CAD:
+  arrastrar mueve, la rueda acerca hacia donde apunta el raton. `7` lo pasa a 3D
+  para girarlo y `D` vuelve al plano.
+- **Textos y cotas:** `TEXT`, `MTEXT` y atributos con su posicion, giro, altura y
+  alineacion; `%%c`, `%%d` y `%%p` salen como Ø, ° y ±; acentos y ñ tanto en DXF
+  nuevos (UTF-8) como viejos (ANSI). Las cotas se dibujan desde el bloque que
+  guardo el CAD, con flechas y valor.
+- Se respetan las capas apagadas o congeladas y se ignora el espacio papel
+  (marco y cajetin a otra escala), salvo que el modelo este vacio.
+
+Lo mismo vale para cualquier formato: un desarrollo de chapa en STEP tambien se
+abre de frente. Los DWG siguen mostrando la imagen que guardo AutoCAD, rotulada
+como plano.
 
 No dependen de ningun kernel CAD externo: el lector de STEP, el mallador y el
 render estan escritos en el repositorio y se compilan a binarios estaticos de
@@ -83,6 +110,7 @@ Los dos usan los mismos controles; el panel muestra una barra de ayuda mas corta
 | Zoom | Rueda del raton |
 | Encuadrar | `F` o doble clic |
 | Vistas | `1` frente, `2` atras, `3` izquierda, `4` derecha, `5` superior, `6` inferior, `7` isometrica |
+| Plano 2D | `D` vuelve a verlo de frente; ahi arrastrar mueve y la rueda acerca hacia el cursor |
 | Alambre | `W` |
 | Aristas | `E` |
 | Perspectiva / ortografica | `P` |
@@ -112,11 +140,11 @@ instalacion y tres herramientas de apoyo (`steprender`, `thumbtest`,
 ## Como esta hecho
 
 ```
-src/engine     lector ISO 10303-21, geometria y mallado
+src/engine     lector ISO 10303-21, geometria, mallado, NURBS y deteccion de planos
 src/formats    IGES, DXF, STL, OBJ, PLY y extraccion de vistas previas
 src/render     rasterizador por software (z-buffer, luces, aristas)
 src/shellext   extensiones COM: miniatura y panel de vista previa
-src/viewer     SceneView (vista 3D interactiva) y el visor independiente
+src/viewer     SceneView (vista 3D interactiva), textos de planos y el visor independiente
 src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
 ```
 
@@ -152,6 +180,10 @@ src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
 - De los formatos cerrados solo se muestra su imagen incrustada; si el archivo
   se guardo sin vista previa, no hay nada que ensenar.
 - El DXF binario no se lee; hay que guardarlo como DXF ASCII.
+- En los planos no se dibujan los rellenos de sombreado (`HATCH`) ni los tipos de
+  linea (trazos, ejes); todo sale con linea continua de un solo color. Los
+  textos usan Arial sin negrita ni cursiva y los `MTEXT` no se ajustan al ancho
+  de su recuadro.
 - Archivos comprimidos `.stpz` se registran pero aun no se descomprimen.
 - Hay topes de trabajo para que ninguna pieza pueda bloquear al Explorador: la
   miniatura se rinde a los 6 s y el panel a los 20 s, dibujando lo que se haya
@@ -189,10 +221,18 @@ tarda 0,9 s y un soporte normal 0,3 s.
 ## Pruebas
 
 ```bash
+./build.sh test                                # pruebas unitarias del motor
 python3 tests/make_samples.py tests/samples   # genera STEP de prueba sin CAD
+python3 tests/make_dxf_samples.py tests/samples  # planos DXF (pip install ezdxf)
 ./build.sh native                              # herramienta de linea de comandos
 ./build/steprender tests/samples/placa_agujero.stp salida.bmp 512
 ```
+
+`tests/unit_tests.cpp` cubre el lector DXF (arcos por bulge, elipses, splines,
+bloques, cotas, capas, espacio papel, textos y codificaciones), la deteccion de
+planos y la camara 2D; corre tambien en cada push. `plano_brida.dxf` es un plano
+con todo lo anterior y `pieza_3d.dxf` una caja de `3DFACE` que tiene que seguir
+viendose en 3D.
 
 `tests/samples` trae una caja, una placa con agujero y un eje, escritos a mano
 por el generador para cubrir caras planas con contorno interno, caras

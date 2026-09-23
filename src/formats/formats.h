@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../engine/mesh.h"
+#include "../engine/planar.h"
 #include "../engine/step_model.h"
 
 namespace stp {

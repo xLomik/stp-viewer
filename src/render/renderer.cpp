@@ -415,19 +415,48 @@ Vec3 Camera::forward() const {
 }
 
 Vec3 Camera::eye() const {
+    if (planView) return target + planNormal * distance;
     const double cp = std::cos(pitch);
     const Vec3 dir(cp * std::cos(yaw), cp * std::sin(yaw), std::sin(pitch));
     return target + dir * distance;
 }
 
 Vec3 Camera::right() const {
+    if (planView) return planRight;
     const Vec3 f = forward();
     Vec3 worldUp(0, 0, 1);
     if (std::fabs(dot(f, worldUp)) > 0.999) worldUp = Vec3(0, 1, 0);
     return normalize(cross(f, worldUp));
 }
 
-Vec3 Camera::up() const { return normalize(cross(right(), forward())); }
+Vec3 Camera::up() const {
+    if (planView) return planUp;
+    return normalize(cross(right(), forward()));
+}
+
+void Camera::fitPlanar(const PlanarInfo& info, double aspect, double margin) {
+    planView = true;
+    ortho = true;
+    planNormal = info.normal;
+    planRight = info.u;
+    planUp = info.v;
+    target = info.center;
+    if (aspect <= 0) aspect = 1.0;
+    const double extent = std::max(1e-6, std::max(info.height, info.width / aspect));
+    orthoHeight = extent * margin;
+    distance = std::max(info.width, info.height) + 1.0;
+}
+
+void Camera::zoomAt(double factor, double sx, double sy, int width, int height) {
+    if (width <= 0 || height <= 0 || factor <= 0) return;
+    const double aspect = static_cast<double>(width) / height;
+    // Desplazamiento del cursor respecto al centro, en unidades del modelo.
+    const double ox = (sx / width - 0.5) * orthoHeight * aspect;
+    const double oy = (0.5 - sy / height) * orthoHeight;
+    target = target + right() * (ox * (1.0 - factor)) + up() * (oy * (1.0 - factor));
+    orthoHeight = std::max(1e-9, orthoHeight * factor);
+    distance = std::max(1e-6, distance * factor);
+}
 
 void Camera::fit(const BBox& box, double aspect, double margin) {
     if (!box.valid()) return;

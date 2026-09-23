@@ -62,7 +62,8 @@ bool writeBmp(const std::string& path, const stp::Framebuffer& fb) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::printf("uso: steprender <archivo.stp> <salida.bmp> [tamano] [--persp] [--no-edges]\n");
+        std::printf("uso: steprender <archivo.stp> <salida.bmp> [tamano] [--persp] [--no-edges]"
+                    " [--wire] [--view=iso|3d|top|front|right]\n");
         return 2;
     }
     const std::string input = argv[1];
@@ -119,6 +120,14 @@ int main(int argc, char** argv) {
                 stats.facesFailed);
     std::printf("triangulos: %zu  aristas: %zu\n", mesh.triangleCount(), mesh.edgeLines.size() / 2);
     std::printf("tamano  : %.3f x %.3f x %.3f\n", s.x, s.y, s.z);
+    const stp::PlanarInfo planar = stp::detectPlanar(mesh);
+    if (planar.planar) {
+        std::printf("plano 2D: %.3f x %.3f  (normal %.3f %.3f %.3f)  textos: %zu\n", planar.width,
+                    planar.height, planar.normal.x, planar.normal.y, planar.normal.z,
+                    mesh.texts.size());
+    } else {
+        std::printf("plano 2D: no\n");
+    }
 
     stp::Camera cam;
     cam.ortho = !persp;
@@ -131,6 +140,14 @@ int main(int argc, char** argv) {
     style.drawEdges = edges;
     style.drawFaces = faces;
     style.supersample = 3;
+    if (planar.planar && view == "iso") {
+        // Igual que la miniatura: de frente al plano, en hoja blanca.
+        cam.fitPlanar(planar, 1.0, 1.06);
+        style.backgroundTop = style.backgroundBottom = 0xFFFFFFFF;
+        style.edgeColor = 0xFF1A2027;
+        style.faceColor = 0xFFD3D9DF;
+        style.edgeWidth = std::min(2.5, std::max(1.2, size / 170.0));
+    }
 
     stp::Framebuffer fb;
     stp::renderMesh(mesh, cam, style, size, size, &fb);

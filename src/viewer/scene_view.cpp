@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "image_view.h"
+#include "text_overlay.h"
 
 namespace stp {
 namespace {
@@ -64,6 +65,7 @@ struct SceneLoadResult {
     std::wstring title;
     std::wstring error;
     std::vector<std::uint8_t> image;  // vista previa incrustada, si la hay
+    PlanarInfo planar;
     unsigned generation = 0;
 };
 
@@ -117,9 +119,8 @@ bool SceneView::create(HINSTANCE instance, HWND parent, const RECT& rect) {
         m_dpi = GetDeviceCaps(dc, LOGPIXELSX);
         ReleaseDC(m_hwnd, dc);
     }
-    m_style.backgroundTop = 0xFF33414F;
-    m_style.backgroundBottom = 0xFF141A21;
     m_camera.ortho = true;
+    updateStyle();
     return true;
 }
 
@@ -158,16 +159,42 @@ void SceneView::setCompact(bool compact) {
 
 void SceneView::setHostColors(COLORREF background, COLORREF text) {
     m_hostColors = true;
-    const std::uint32_t argb = toArgb(background);
-    m_style.backgroundTop = argb;
-    m_style.backgroundBottom = argb;
-    m_style.transparentBackground = false;
+    m_hostBackground = background;
     m_textColor = text;
-    const bool light = isLight(background);
-    m_dimColor = light ? RGB(110, 120, 132) : RGB(150, 162, 176);
-    m_style.edgeColor = light ? 0xFF33414E : 0xFF20282F;
-    m_frameValid = false;
+    m_dimColor = isLight(background) ? RGB(110, 120, 132) : RGB(150, 162, 176);
+    updateStyle();
     invalidate();
+}
+
+// Colores segun el modo. En planos y alambres las lineas son todo el dibujo:
+// claras sobre fondo oscuro y oscuras si el Explorador usa tema claro.
+void SceneView::updateStyle() {
+    const bool lightHost = m_hostColors && isLight(m_hostBackground);
+    if (m_hostColors) {
+        m_style.backgroundTop = toArgb(m_hostBackground);
+        m_style.backgroundBottom = m_style.backgroundTop;
+    } else if (m_plan2d) {
+        m_style.backgroundTop = 0xFF1C232A;
+        m_style.backgroundBottom = 0xFF1C232A;
+    } else {
+        m_style.backgroundTop = 0xFF33414F;
+        m_style.backgroundBottom = 0xFF141A21;
+    }
+    m_style.transparentBackground = false;
+
+    const bool linesOnly = m_plan2d || !m_style.drawFaces || m_mesh.indices.empty();
+    if (linesOnly) {
+        m_style.edgeColor = lightHost ? 0xFF1E2833 : 0xFFE3E9EF;
+        // Rellenos (SOLID, 3DFACE de un plano) apagados para que las lineas se lean encima.
+        m_style.faceColor = lightHost ? 0xFFCBD3DB : 0xFF3A4652;
+    } else {
+        m_style.edgeColor = lightHost ? 0xFF33414E : 0xFF20282F;
+        m_style.faceColor = 0xFFB9C4CC;
+    }
+    m_style.edgeWidth = m_plan2d ? 1.25 : 1.1;
+    m_drawingColor = RGB((m_style.edgeColor >> 16) & 0xFF, (m_style.edgeColor >> 8) & 0xFF,
+                         m_style.edgeColor & 0xFF);
+    m_frameValid = false;
 }
 
 void SceneView::invalidate() {
@@ -192,6 +219,8 @@ void SceneView::loadMemory(std::string bytes, const std::wstring& title) {
     const unsigned generation = ++m_generation;
     m_loading = true;
     m_mesh = Mesh();
+    m_plan2d = false;
+    m_camera.planView = false;
     m_frameValid = false;
     m_title = title;
     m_message = L"Cargando...";
@@ -206,6 +235,8 @@ void SceneView::loadMemory(std::string bytes, const std::wstring& title) {
             extension.push_back(static_cast<char>(std::tolower(static_cast<int>(title[i]))));
         }
     }
+
+    m_isDrawingFile = extension == ".dwg";
 
     auto channel = m_channel;
     HWND hwnd = m_hwnd;
@@ -222,6 +253,8 @@ void SceneView::loadMemory(std::string bytes, const std::wstring& title) {
             result->error = utf8ToWide(error);
             // Sin geometria legible aun queda la imagen que guardo el CAD.
             extractEmbeddedPreview(data.data(), data.size(), &result->image);
+        } else {
+            result->planar = detectPlanar(result->mesh);
         }
 
         std::lock_guard<std::mutex> lock(channel->mutex);
@@ -242,8 +275,11 @@ void SceneView::applyModel(SceneLoadResult* result) {
     if (!result->image.empty()) {
         m_image = decodePreviewImage(result->image, &m_imageWidth, &m_imageHeight);
     }
+    m_plan2d = false;
+    m_camera.planView = false;
     if (m_image) {
         m_mesh = Mesh();
+        updateStyle();
         m_title = result->title;
         m_message.clear();
         m_frameValid = false;
@@ -252,6 +288,7 @@ void SceneView::applyModel(SceneLoadResult* result) {
     }
     if (!result->error.empty() || result->mesh.empty()) {
         m_mesh = Mesh();
+        updateStyle();
         m_message = result->error.empty() ? L"El archivo no contiene geometria legible"
                                           : result->error;
         m_frameValid = false;
@@ -263,6 +300,10 @@ void SceneView::applyModel(SceneLoadResult* result) {
     m_title = result->title;
     m_message.clear();
     m_truncated = result->stats.truncated;
+    // Un plano 2D se abre de frente; en isometrica sus lineas se pierden.
+    m_planar = result->planar;
+    m_plan2d = m_planar.planar;
+    updateStyle();
     fitView();
     requestQualityPass();
 }
@@ -270,14 +311,34 @@ void SceneView::applyModel(SceneLoadResult* result) {
 void SceneView::fitView() {
     if (!m_mesh.bounds.valid()) return;
     const double aspect = m_height > 0 ? static_cast<double>(m_width) / m_height : 1.0;
-    m_camera.fit(m_mesh.bounds, aspect);
+    if (m_plan2d) {
+        // Deja libres las franjas de arriba y abajo, donde van la etiqueta y la ayuda.
+        const double reserve = scaled(m_compact ? 22 : 30);
+        const double usable = m_height > 0 ? std::max(0.5, (m_height - 2.0 * reserve) / m_height) : 1.0;
+        m_camera.fitPlanar(m_planar, aspect, 1.04 / usable);
+    } else {
+        m_camera.planView = false;
+        m_camera.fit(m_mesh.bounds, aspect);
+    }
     m_frameValid = false;
     invalidate();
 }
 
 void SceneView::setStandardView(double yaw, double pitch) {
+    if (m_plan2d) {
+        m_plan2d = false;
+        updateStyle();
+    }
+    m_camera.planView = false;
     m_camera.yaw = yaw;
     m_camera.pitch = pitch;
+    fitView();
+}
+
+void SceneView::enterPlanView() {
+    if (!m_planar.planar) return;
+    m_plan2d = true;
+    updateStyle();
     fitView();
 }
 
@@ -398,12 +459,21 @@ void SceneView::drawOverlay(HDC dc) {
     if (m_image) {
         RECT box = {pad, pad, m_width - pad, pad + scaled(20)};
         SetTextColor(dc, m_textColor);
-        DrawTextW(dc, (m_title + L"   (vista previa guardada por el CAD)").c_str(), -1, &box,
+        const wchar_t* note = m_isDrawingFile ? L"   Plano (imagen guardada por el CAD)"
+                                              : L"   (vista previa guardada por el CAD)";
+        DrawTextW(dc, (m_title + note).c_str(), -1, &box,
                   DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else if (!m_mesh.empty()) {
         const Vec3 size = m_mesh.bounds.size();
         wchar_t line[512];
-        if (m_compact) {
+        if (m_plan2d) {
+            if (m_compact) {
+                swprintf(line, 512, L"Plano 2D   %.1f x %.1f", m_planar.width, m_planar.height);
+            } else {
+                swprintf(line, 512, L"%ls    Plano 2D   %.2f x %.2f", m_title.c_str(),
+                         m_planar.width, m_planar.height);
+            }
+        } else if (m_compact) {
             swprintf(line, 512, L"%.1f x %.1f x %.1f    %zu triangulos", size.x, size.y, size.z,
                      m_mesh.triangleCount());
         } else {
@@ -424,13 +494,20 @@ void SceneView::drawOverlay(HDC dc) {
 
         RECT help = {pad, m_height - pad - scaled(18), m_width - pad, m_height - pad};
         SetTextColor(dc, m_dimColor);
-        const wchar_t* hint =
-            m_compact ? L"Arrastrar: girar   Rueda: zoom   F: encuadrar"
-                      : L"Arrastrar: girar   |   Rueda: zoom   |   Boton derecho o medio: mover   "
-                        L"|   F: encuadrar   |   1-6: vistas   |   W: alambre   |   E: aristas   "
-                        L"|   P: perspectiva";
-        DrawTextW(dc, hint, -1, &help, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        drawTriad(dc);
+        std::wstring hint;
+        if (m_plan2d) {
+            hint = m_compact ? L"Arrastrar: mover   Rueda: zoom   F: encuadrar"
+                             : L"Arrastrar: mover   |   Rueda: zoom al cursor   |   "
+                               L"F o doble clic: encuadrar   |   7: ver en 3D";
+        } else {
+            hint = m_compact ? L"Arrastrar: girar   Rueda: zoom   F: encuadrar"
+                             : L"Arrastrar: girar   |   Rueda: zoom   |   Boton derecho o medio: "
+                               L"mover   |   F: encuadrar   |   1-6: vistas   |   W: alambre   |   "
+                               L"E: aristas   |   P: perspectiva";
+            if (!m_compact && m_planar.planar) hint += L"   |   D: plano 2D";
+        }
+        DrawTextW(dc, hint.c_str(), -1, &help, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (!m_plan2d) drawTriad(dc);
     }
     if (!m_message.empty()) {
         RECT box = {pad, m_height / 2 - scaled(14), m_width - pad, m_height / 2 + scaled(14)};
@@ -444,8 +521,28 @@ void SceneView::drawOverlay(HDC dc) {
 
 void SceneView::onPaint() {
     PAINTSTRUCT ps;
-    HDC dc = BeginPaint(m_hwnd, &ps);
+    HDC target = BeginPaint(m_hwnd, &ps);
 
+    // Todo se compone en memoria y se copia de una vez: sin parpadeo de los
+    // textos del plano al mover.
+    HDC memory = CreateCompatibleDC(target);
+    HBITMAP buffer = memory ? CreateCompatibleBitmap(target, std::max(1, m_width),
+                                                     std::max(1, m_height))
+                            : nullptr;
+    if (memory && buffer) {
+        HGDIOBJ old = SelectObject(memory, buffer);
+        drawScene(memory);
+        BitBlt(target, 0, 0, m_width, m_height, memory, 0, 0, SRCCOPY);
+        SelectObject(memory, old);
+    } else {
+        drawScene(target);
+    }
+    if (buffer) DeleteObject(buffer);
+    if (memory) DeleteDC(memory);
+    EndPaint(m_hwnd, &ps);
+}
+
+void SceneView::drawScene(HDC dc) {
     if (m_image) {
         RECT client;
         GetClientRect(m_hwnd, &client);
@@ -468,7 +565,6 @@ void SceneView::onPaint() {
         SelectObject(memory, old);
         DeleteDC(memory);
         drawOverlay(dc);
-        EndPaint(m_hwnd, &ps);
         return;
     }
 
@@ -492,6 +588,7 @@ void SceneView::onPaint() {
             StretchDIBits(dc, 0, 0, m_width, m_height, 0, 0, m_frame.width, m_frame.height,
                           m_frame.pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
         }
+        drawMeshTexts(dc, m_mesh, m_camera, m_width, m_height, m_drawingColor);
     } else {
         RECT client;
         GetClientRect(m_hwnd, &client);
@@ -505,7 +602,6 @@ void SceneView::onPaint() {
     }
 
     drawOverlay(dc);
-    EndPaint(m_hwnd, &ps);
 }
 
 LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -541,8 +637,9 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             SetCapture(m_hwnd);
             m_lastMouse.x = GET_X_LPARAM(lparam);
             m_lastMouse.y = GET_Y_LPARAM(lparam);
-            m_orbiting = (msg == WM_LBUTTONDOWN);
-            m_panning = (msg != WM_LBUTTONDOWN);
+            // En un plano no hay nada que girar: cualquier boton mueve.
+            m_orbiting = (msg == WM_LBUTTONDOWN) && !m_plan2d;
+            m_panning = !m_orbiting;
             return 0;
 
         case WM_LBUTTONUP:
@@ -588,8 +685,15 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             if (m_mesh.empty()) return 0;
             const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
             const double factor = delta > 0 ? 0.88 : 1.0 / 0.88;
-            m_camera.orthoHeight = std::max(1e-6, m_camera.orthoHeight * factor);
-            m_camera.distance = std::max(1e-6, m_camera.distance * factor);
+            if (m_plan2d) {
+                // Como en un CAD: se acerca hacia donde apunta el raton.
+                POINT cursor = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+                ScreenToClient(m_hwnd, &cursor);
+                m_camera.zoomAt(factor, cursor.x, cursor.y, m_width, m_height);
+            } else {
+                m_camera.orthoHeight = std::max(1e-6, m_camera.orthoHeight * factor);
+                m_camera.distance = std::max(1e-6, m_camera.distance * factor);
+            }
             m_frameValid = false;
             invalidate();
             requestQualityPass();
@@ -618,12 +722,12 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
                 case '6': setStandardView(-1.5707963, -1.5533430); break;
                 case '0':
                 case '7': setStandardView(-0.7853982, 0.5235988); break;
+                case 'D': enterPlanView(); break;
                 case 'W':
                     m_style.drawFaces = !m_style.drawFaces;
                     // Sin caras las aristas oscuras se pierden contra el fondo.
-                    m_style.edgeColor = m_style.drawFaces ? 0xFF20282F : 0xFFD8E0E8;
                     m_style.drawEdges = true;
-                    m_frameValid = false;
+                    updateStyle();
                     invalidate();
                     break;
                 case 'E':
@@ -632,6 +736,7 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
                     invalidate();
                     break;
                 case 'P':
+                    if (m_plan2d) break;  // un plano solo tiene sentido en ortografica
                     m_camera.ortho = !m_camera.ortho;
                     fitView();
                     break;

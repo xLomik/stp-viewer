@@ -16,6 +16,9 @@ jobs:
       - name: Instalar mingw-w64
         run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 mingw-w64-tools
 
+      - name: Pruebas unitarias
+        run: ./build.sh test
+
       - name: Compilar
         run: ./build.sh
 

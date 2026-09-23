@@ -53,6 +53,9 @@ private:
     void drawTriad(HDC dc);
     void fitView();
     void setStandardView(double yaw, double pitch);
+    void enterPlanView();
+    void updateStyle();
+    void drawScene(HDC dc);
     void requestQualityPass();
     void invalidate();
     int scaled(int value) const { return MulDiv(value, m_dpi, 96); }
@@ -66,6 +69,9 @@ private:
 
     Mesh m_mesh;
     LoadStats m_stats;
+    // Dibujo 2D: se mira de frente al plano y se navega como en un CAD.
+    PlanarInfo m_planar;
+    bool m_plan2d = false;
     Camera m_camera;
     RenderStyle m_style;
     Framebuffer m_frame;
@@ -78,12 +84,15 @@ private:
     double m_msPerSample = 0.0;
     bool m_compact = false;
     bool m_hostColors = false;
+    COLORREF m_hostBackground = RGB(0, 0, 0);
+    COLORREF m_drawingColor = RGB(226, 232, 238);  // textos del plano
     bool m_truncated = false;
     int m_budgetMs = 0;
     COLORREF m_textColor = RGB(226, 232, 238);
     COLORREF m_dimColor = RGB(138, 152, 166);
 
     std::wstring m_title;
+    bool m_isDrawingFile = false;  // .dwg: su imagen es un plano
     std::wstring m_message;
     // Formatos propietarios: se muestra la imagen que el CAD dejo dentro.
     HBITMAP m_image = nullptr;
