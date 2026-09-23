@@ -116,6 +116,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     stp::SceneView view;
     g_view = &view;
     view.setBudget(120000);
+    view.enableTools(true);
     if (!view.create(instance, frame, client)) return 1;
 
     ShowWindow(frame, showCmd);
@@ -132,7 +133,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         if (msg.message == WM_KEYDOWN && msg.hwnd == view.hwnd()) {
             // Ctrl+O y Escape los atiende el marco aunque el foco este en la vista.
-            if ((msg.wParam == 'O' && GetKeyState(VK_CONTROL) < 0) || msg.wParam == VK_ESCAPE) {
+            if ((msg.wParam == 'O' && GetKeyState(VK_CONTROL) < 0) ||
+                (msg.wParam == VK_ESCAPE && !view.toolActive())) {
                 SendMessageW(frame, WM_KEYDOWN, msg.wParam, msg.lParam);
                 continue;
             }

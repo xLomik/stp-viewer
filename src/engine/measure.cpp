@@ -179,9 +179,19 @@ SnapResult PickIndex::snap(const Mesh& mesh, const Camera& camera, int width, in
     const bool hit = raycast(mesh, ray, &hitT, &hitTriangle);
     result.triangle = hit ? hitTriangle : -1;
 
-    // Un punto tapado por la pieza no se engancha.
-    const double occlusion = m_size * 1e-3;
-    auto visible = [&](const Vec3& p) { return !hit || dot(p - ray.origin, ray.dir) <= hitT + occlusion; };
+    // Un punto tapado por la pieza no se engancha. Se prueba con el rayo que pasa
+    // justo por el punto, no con el del cursor: cerca de una cara vista de canto el
+    // rayo del cursor la toca bastante antes que una esquina que si se ve.
+    const double occlusion = m_size * 1e-4;
+    auto visible = [&](const Vec3& p) {
+        double px, py;
+        if (!projectPoint(camera, width, height, p, &px, &py)) return false;
+        const Ray through = pixelRay(camera, width, height, px, py);
+        double t = 0.0;
+        int triangle = -1;
+        if (!raycast(mesh, through, &t, &triangle)) return true;
+        return dot(p - through.origin, through.dir) <= t + occlusion;
+    };
     auto pixels = [&](const Vec3& p, double* d) {
         double px, py;
         if (!projectPoint(camera, width, height, p, &px, &py)) return false;

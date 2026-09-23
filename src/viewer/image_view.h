@@ -16,4 +16,7 @@ HBITMAP decodePreviewImage(const std::vector<std::uint8_t>& bytes, int* width, i
 // lado size, con fondo transparente: justo lo que espera el Explorador.
 HBITMAP fitPreviewToSquare(HBITMAP source, int sourceWidth, int sourceHeight, int size);
 
+// Arranca GDI+ una vez por proceso. Devuelve false si no esta disponible.
+bool ensureGdiplus();
+
 }  // namespace stp

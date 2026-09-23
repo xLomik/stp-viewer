@@ -5,18 +5,20 @@
 #include <windows.h>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 
 #include "../formats/formats.h"
 #include "../render/renderer.h"
+#include "markup_tools.h"
 
 namespace stp {
 
 struct SceneLoadChannel;
 struct SceneLoadResult;
 
-class SceneView {
+class SceneView : public MarkupHost {
 public:
     // La clase de ventana la registra el propio componente.
     static LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -42,6 +44,27 @@ public:
     void setBudget(int milliseconds) { m_budgetMs = milliseconds; }
 
     bool hasModel() const { return !m_mesh.empty(); }
+
+    // Herramientas de medir y marcar. editing = false en el panel: solo medir.
+    void enableTools(bool editing);
+    MarkupTools* tools() { return m_tools.get(); }
+    bool toolActive() const { return m_tools && m_tools->active(); }
+    void setMarkupListener(std::function<void()> listener) { m_markupListener = std::move(listener); }
+
+    // MarkupHost
+    HWND markupWindow() const override { return m_hwnd; }
+    const Mesh& markupMesh() const override { return m_mesh; }
+    const PickIndex& markupPick() const override;
+    const Camera& markupCamera() const override { return m_camera; }
+    void markupSetCamera(const Camera& camera) override;
+    const PlanarInfo* markupPlane() const override { return m_plan2d ? &m_planar : nullptr; }
+    int markupWidth() const override { return m_width; }
+    int markupHeight() const override { return m_height; }
+    int markupDpi() const override { return m_dpi; }
+    void markupRedraw() override { invalidate(); }
+    void markupChanged() override {
+        if (m_markupListener) m_markupListener();
+    }
 
 private:
     LRESULT handle(UINT msg, WPARAM wparam, LPARAM lparam);
@@ -101,6 +124,11 @@ private:
     std::shared_ptr<SceneLoadChannel> m_channel;
     std::atomic<unsigned> m_generation{0};
     std::atomic<bool> m_loading{false};
+
+    std::unique_ptr<MarkupTools> m_tools;
+    std::shared_ptr<PickIndex> m_pick;
+    std::function<void()> m_markupListener;
+    bool m_toolsEnabled = false;
 
     bool m_orbiting = false;
     bool m_panning = false;

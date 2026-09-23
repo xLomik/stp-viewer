@@ -32,6 +32,8 @@ private:
 
 }  // namespace
 
+bool ensureGdiplus() { return GdiPlusSession::ensure(); }
+
 HBITMAP decodePreviewImage(const std::vector<std::uint8_t>& bytes, int* width, int* height) {
     if (bytes.empty() || !GdiPlusSession::ensure()) return nullptr;
 

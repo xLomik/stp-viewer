@@ -66,6 +66,7 @@ struct SceneLoadResult {
     std::wstring error;
     std::vector<std::uint8_t> image;  // vista previa incrustada, si la hay
     PlanarInfo planar;
+    std::shared_ptr<PickIndex> pick;
     unsigned generation = 0;
 };
 
@@ -241,7 +242,8 @@ void SceneView::loadMemory(std::string bytes, const std::wstring& title) {
     auto channel = m_channel;
     HWND hwnd = m_hwnd;
     const int budgetMs = m_budgetMs;
-    std::thread([channel, hwnd, generation, title, budgetMs, extension,
+    const bool buildPick = m_toolsEnabled;
+    std::thread([channel, hwnd, generation, title, budgetMs, extension, buildPick,
                  data = std::move(bytes)]() {
         auto result = std::make_unique<SceneLoadResult>();
         result->generation = generation;
@@ -255,6 +257,11 @@ void SceneView::loadMemory(std::string bytes, const std::wstring& title) {
             extractEmbeddedPreview(data.data(), data.size(), &result->image);
         } else {
             result->planar = detectPlanar(result->mesh);
+            if (buildPick) {
+                // El indice se arma en este hilo: en planos enormes tarda cientos de ms.
+                result->pick = std::make_shared<PickIndex>();
+                result->pick->build(result->mesh);
+            }
         }
 
         std::lock_guard<std::mutex> lock(channel->mutex);
@@ -279,6 +286,8 @@ void SceneView::applyModel(SceneLoadResult* result) {
     m_camera.planView = false;
     if (m_image) {
         m_mesh = Mesh();
+        m_pick.reset();
+        if (m_tools) m_tools->clear();
         updateStyle();
         m_title = result->title;
         m_message.clear();
@@ -288,6 +297,8 @@ void SceneView::applyModel(SceneLoadResult* result) {
     }
     if (!result->error.empty() || result->mesh.empty()) {
         m_mesh = Mesh();
+        m_pick.reset();
+        if (m_tools) m_tools->clear();
         updateStyle();
         m_message = result->error.empty() ? L"El archivo no contiene geometria legible"
                                           : result->error;
@@ -296,6 +307,8 @@ void SceneView::applyModel(SceneLoadResult* result) {
         return;
     }
     m_mesh = std::move(result->mesh);
+    m_pick = result->pick;
+    if (m_tools) m_tools->clear();
     m_stats = result->stats;
     m_title = result->title;
     m_message.clear();
@@ -496,15 +509,19 @@ void SceneView::drawOverlay(HDC dc) {
         SetTextColor(dc, m_dimColor);
         std::wstring hint;
         if (m_plan2d) {
-            hint = m_compact ? L"Arrastrar: mover   Rueda: zoom   F: encuadrar"
+            hint = m_compact ? L"Arrastrar: mover   Rueda: zoom   F: encuadrar   M: medir"
                              : L"Arrastrar: mover   |   Rueda: zoom al cursor   |   "
-                               L"F o doble clic: encuadrar   |   7: ver en 3D";
+                               L"F o doble clic: encuadrar   |   7: ver en 3D   |   M: medir";
         } else {
-            hint = m_compact ? L"Arrastrar: girar   Rueda: zoom   F: encuadrar"
+            hint = m_compact ? L"Arrastrar: girar   Rueda: zoom   F: encuadrar   M: medir"
                              : L"Arrastrar: girar   |   Rueda: zoom   |   Boton derecho o medio: "
                                L"mover   |   F: encuadrar   |   1-6: vistas   |   W: alambre   |   "
-                               L"E: aristas   |   P: perspectiva";
+                               L"A: aristas   |   P: perspectiva   |   M: medir";
             if (!m_compact && m_planar.planar) hint += L"   |   D: plano 2D";
+        }
+        if (m_tools && !m_tools->hint().empty()) {
+            hint = m_tools->hint();
+            SetTextColor(dc, m_textColor);
         }
         DrawTextW(dc, hint.c_str(), -1, &help, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (!m_plan2d) drawTriad(dc);
@@ -589,6 +606,7 @@ void SceneView::drawScene(HDC dc) {
                           m_frame.pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
         }
         drawMeshTexts(dc, m_mesh, m_camera, m_width, m_height, m_drawingColor);
+        if (m_tools) m_tools->draw(dc, m_camera, m_width, m_height, 1.0, true);
     } else {
         RECT client;
         GetClientRect(m_hwnd, &client);
@@ -604,7 +622,26 @@ void SceneView::drawScene(HDC dc) {
     drawOverlay(dc);
 }
 
+void SceneView::enableTools(bool editing) {
+    m_toolsEnabled = true;
+    m_tools = std::make_unique<MarkupTools>(this, editing);
+}
+
+const PickIndex& SceneView::markupPick() const {
+    static const PickIndex empty;
+    return m_pick ? *m_pick : empty;
+}
+
+void SceneView::markupSetCamera(const Camera& camera) {
+    m_camera = camera;
+    m_frameValid = false;
+    invalidate();
+}
+
 LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (m_tools && !m_mesh.empty() && m_tools->handle(msg, wparam, lparam)) {
+        return msg == WM_SETCURSOR ? TRUE : 0;
+    }
     switch (msg) {
         case WM_SIZE:
             m_width = LOWORD(lparam);
@@ -730,6 +767,7 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
                     updateStyle();
                     invalidate();
                     break;
+                case 'A':
                 case 'E':
                     m_style.drawEdges = !m_style.drawEdges;
                     m_frameValid = false;

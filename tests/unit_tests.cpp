@@ -1024,6 +1024,33 @@ TEST(snap_ignores_points_hidden_behind_faces) {
     CHECK_NEAR(stp::distance(visible.point, front), 0.0, 1e-9);
 }
 
+TEST(snap_visible_silhouette_corner_from_any_side) {
+    // Esquina visible en el borde de la silueta: desde cualquier lado a 4 px
+    // tiene que engancharse, aunque el rayo del cursor toque una cara casi de canto.
+    // Caso real del panel: placa de 80x50x8 en 812x606, esquina izquierda de arriba.
+    stp::Mesh mesh;
+    CHECK(loadStepText(readText("tests/samples/placa_agujero.stp"), &mesh));
+    const int w = 812, h = 606;
+    stp::Camera camera;
+    camera.fit(mesh.bounds, static_cast<double>(w) / h);
+    stp::PickIndex pick;
+    pick.build(mesh);
+    stp::SnapOptions options;
+    const stp::Vec3 corners[] = {stp::Vec3(mesh.bounds.lo.x, mesh.bounds.lo.y, mesh.bounds.hi.z),
+                                 stp::Vec3(mesh.bounds.hi.x, mesh.bounds.lo.y, mesh.bounds.hi.z)};
+    int misses = 0;
+    for (const stp::Vec3& corner : corners) {
+        double sx, sy;
+        stp::projectPoint(camera, w, h, corner, &sx, &sy);
+        for (int k = 0; k < 16; ++k) {
+            const double a = 2 * stp::kPi * k / 16;
+            const stp::SnapResult r = pick.snap(mesh, camera, w, h, sx + 4 * std::cos(a), sy + 4 * std::sin(a), options);
+            if (r.kind != stp::SnapKind::Endpoint || stp::distance(r.point, corner) > 1e-9) ++misses;
+        }
+    }
+    CHECK(misses == 0);
+}
+
 TEST(snap_is_fast_on_huge_drawing) {
     // 20 000 circulos de 72 tramos y 20 000 rectangulos: 1,52 millones de segmentos.
     PlanScene scene;

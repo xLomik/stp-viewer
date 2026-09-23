@@ -121,6 +121,7 @@ public:
         if (!m_view.create(g_shellExtModule, m_parent, local)) return E_FAIL;
 
         m_view.setCompact(true);
+        m_view.enableTools(false);
         // prevhost.exe es un proceso aparte, pero el panel no puede quedarse
         // cargando para siempre con un archivo enorme.
         m_view.setBudget(20000);

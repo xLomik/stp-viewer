@@ -23,6 +23,7 @@ COTA_MM = {"dimtxt": 3.5, "dimasz": 3.0, "dimlfac": 1.0, "dimexe": 1.5, "dimexo"
 
 def plano_brida(path: Path) -> None:
     doc = ezdxf.new("R2018", setup=True)
+    doc.units = ezdxf.units.MM  # ezdxf declara metros si no se dice nada
     doc.layers.add("CONTORNO", color=7)
     doc.layers.add("EJES", color=1, linetype="CENTER")
     doc.layers.add("COTAS", color=3)
@@ -101,6 +102,7 @@ def plano_brida(path: Path) -> None:
 
 def pieza_3d(path: Path) -> None:
     doc = ezdxf.new("R2010")
+    doc.units = ezdxf.units.MM
     msp = doc.modelspace()
     x, y, z = 60.0, 40.0, 25.0
     v = [(0, 0, 0), (x, 0, 0), (x, y, 0), (0, y, 0), (0, 0, z), (x, 0, z), (x, y, z), (0, y, z)]
