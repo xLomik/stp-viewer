@@ -177,16 +177,15 @@ guardadas.
   escapes `\"`, `\\`, `\n`:
   ```
   stp-viewer-marcas 1
-  modelo "brida.dxf" tamano=64385 fecha=2026-09-23T12:00:00
-  vista id=1 nombre="Vista 1" camara=...
-  medida tipo=distancia a=x,y,z b=x,y,z
-  nota punto=x,y,z etiqueta=x,y,z texto="Revisar este agujero"
-  trazo tipo=resaltador vista=1 color=#FFE14D puntos=x,y,z;x,y,z;...
-  forma tipo=nube vista=1 color=#E03C31 a=x,y,z b=x,y,z
+  modelo nombre="brida.dxf" tamano=64385 fecha="2026-09-23T12:00:00"
+  vista id=1 nombre="Vista 1" objetivo=x,y,z distancia=… yaw=… pitch=… fov=… alto_orto=… orto=1 plano=0 normal=x,y,z derecha=x,y,z arriba=x,y,z
+  medida id=2 tipo=distancia vista=0 color=#FF8C1A puntos=x,y,z;x,y,z
+  nota id=3 vista=0 color=#E03C31 puntos=ancla;etiqueta texto="Revisar este agujero"
+  trazo id=4 tipo=resaltador vista=1 color=#FFE14D puntos=x,y,z;x,y,z;...
+  forma id=5 tipo=nube vista=1 color=#E03C31 puntos=esquina;esquina
   ```
-- `camara=` guarda todos los campos de `Camera`: `objetivo`, `distancia`,
-  `yaw`, `pitch`, `alto_orto`, `orto`, `plano` y, si es vista de plano,
-  `normal`, `derecha` y `arriba`. En la línea de ejemplo se abrevió con `...`.
+  Todas las marcas guardan sus puntos en una sola clave `puntos=`.
+- La línea `vista` guarda todos los campos de `Camera`.
 - Los valores medidos no se guardan: se recalculan de los puntos al abrir, así
   la medida no puede contradecir al modelo.
 - Guardado automático al cerrar o cambiar de archivo, y con `Ctrl+S`. Sin marcas,
