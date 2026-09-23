@@ -1,15 +1,18 @@
 // Pruebas unitarias del motor. Sin dependencias: se compilan y corren con
 //     ./build.sh test
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "../src/engine/measure.h"
 #include "../src/engine/nurbs.h"
 #include "../src/formats/formats.h"
 #include "../src/render/renderer.h"
@@ -899,6 +902,163 @@ TEST(camera_leaving_plan_view_restores_orbit) {
     camera.yaw = 0.0;
     camera.pitch = 0.0;
     CHECK_NEAR(camera.forward().x, -1.0, 1e-12);
+}
+
+// --- Seleccion y enganche --------------------------------------------------------
+
+namespace {
+
+struct PlanScene {
+    stp::Mesh mesh;
+    stp::PlanarInfo plane;
+    stp::Camera camera;
+    stp::PickIndex pick;
+    int width = 800, height = 600;
+
+    void finish() {
+        plane = stp::detectPlanar(mesh);
+        camera.fitPlanar(plane, static_cast<double>(width) / height);
+        pick.build(mesh);
+    }
+    stp::SnapResult snapNear(const stp::Vec3& world, double dx, double dy, bool snapping = true) {
+        double sx = 0, sy = 0;
+        stp::projectPoint(camera, width, height, world, &sx, &sy);
+        stp::SnapOptions options;
+        options.snapping = snapping;
+        options.plane = &plane;
+        return pick.snap(mesh, camera, width, height, sx + dx, sy + dy, options);
+    }
+};
+
+PlanScene lineAndCircle() {
+    PlanScene scene;
+    const std::string text = entities({{0, "LINE"}, {10, "0"}, {20, "0"}, {11, "100"}, {21, "0"},
+                                       {0, "CIRCLE"}, {10, "50"}, {20, "40"}, {40, "10"}});
+    loadDxfText(text, &scene.mesh);
+    scene.finish();
+    return scene;
+}
+
+}  // namespace
+
+TEST(snap_endpoint_near_cursor) {
+    PlanScene scene = lineAndCircle();
+    const stp::SnapResult near = scene.snapNear(stp::Vec3(100, 0, 0), 5, -3);
+    CHECK(near.kind == stp::SnapKind::Endpoint);
+    CHECK_NEAR(near.point.x, 100.0, 1e-9);
+    const stp::SnapResult far = scene.snapNear(stp::Vec3(100, 0, 0), 20, 0);
+    CHECK(far.kind == stp::SnapKind::OnPlane);
+}
+
+TEST(snap_midpoint_and_center) {
+    PlanScene scene = lineAndCircle();
+    const stp::SnapResult mid = scene.snapNear(stp::Vec3(50, 0, 0), 2, 2);
+    CHECK(mid.kind == stp::SnapKind::Midpoint);
+    CHECK_NEAR(mid.point.x, 50.0, 1e-9);
+    const stp::SnapResult center = scene.snapNear(stp::Vec3(50, 40, 0), -3, 1);
+    CHECK(center.kind == stp::SnapKind::Center);
+    CHECK(center.circle == 0);
+}
+
+TEST(snap_on_circle_edge_has_no_fake_endpoints) {
+    PlanScene scene = lineAndCircle();
+    // Un punto del circulo lejos de su centro: solo puede ser "sobre la arista".
+    const stp::SnapResult edge = scene.snapNear(stp::Vec3(60, 40, 0), 0, 2);
+    CHECK(edge.kind == stp::SnapKind::OnEdge);
+    CHECK(edge.segment >= 1);
+    CHECK_NEAR(stp::distance(edge.point, stp::Vec3(50, 40, 0)), 10.0, 0.05);
+}
+
+TEST(snap_can_be_disabled) {
+    PlanScene scene = lineAndCircle();
+    const stp::SnapResult free = scene.snapNear(stp::Vec3(100, 0, 0), 0, 0, false);
+    CHECK(free.kind == stp::SnapKind::OnPlane);
+    CHECK_NEAR(free.point.x, 100.0, 1e-6);
+    CHECK_NEAR(free.point.z, 0.0, 1e-9);
+}
+
+TEST(raycast_matches_brute_force) {
+    stp::Mesh mesh;
+    CHECK(loadStepText(readText("tests/samples/placa_agujero.stp"), &mesh));
+    stp::Camera camera;
+    camera.fit(mesh.bounds, 1.0);
+    stp::PickIndex pick;
+    pick.build(mesh);
+    for (int i = 0; i < 25; ++i) {
+        const stp::Ray ray = stp::pixelRay(camera, 500, 500, 100 + 12 * i, 180 + 6 * i);
+        double t = 0;
+        int triangle = -1;
+        const bool hit = pick.raycast(mesh, ray, &t, &triangle);
+        double best = 1e300;
+        for (std::size_t k = 0; k < mesh.triangleCount(); ++k) {
+            double tk;
+            if (stp::rayTriangle(ray, mesh.positions[mesh.indices[3 * k]],
+                                 mesh.positions[mesh.indices[3 * k + 1]],
+                                 mesh.positions[mesh.indices[3 * k + 2]], &tk)) {
+                best = std::min(best, tk);
+            }
+        }
+        CHECK(hit == (best < 1e299));
+        if (hit) CHECK_NEAR(t, best, 1e-9);
+    }
+}
+
+TEST(snap_ignores_points_hidden_behind_faces) {
+    stp::Mesh mesh;
+    CHECK(loadStepText(readText("tests/samples/caja.stp"), &mesh));
+    stp::Camera camera;  // isometrica por defecto: el ojo esta en +X, -Y, +Z
+    camera.fit(mesh.bounds, 1.0);
+    stp::PickIndex pick;
+    pick.build(mesh);
+    const stp::Vec3 hidden(mesh.bounds.lo.x, mesh.bounds.hi.y, mesh.bounds.lo.z);
+    const stp::Vec3 front(mesh.bounds.hi.x, mesh.bounds.lo.y, mesh.bounds.hi.z);
+    double sx, sy;
+    stp::SnapOptions options;
+    stp::projectPoint(camera, 500, 500, hidden, &sx, &sy);
+    const stp::SnapResult behind = pick.snap(mesh, camera, 500, 500, sx, sy, options);
+    CHECK(!(behind.kind == stp::SnapKind::Endpoint && stp::distance(behind.point, hidden) < 1e-9));
+    stp::projectPoint(camera, 500, 500, front, &sx, &sy);
+    const stp::SnapResult visible = pick.snap(mesh, camera, 500, 500, sx + 2, sy - 2, options);
+    CHECK(visible.kind == stp::SnapKind::Endpoint);
+    CHECK_NEAR(stp::distance(visible.point, front), 0.0, 1e-9);
+}
+
+TEST(snap_is_fast_on_huge_drawing) {
+    // 20 000 circulos de 72 tramos y 20 000 rectangulos: 1,52 millones de segmentos.
+    PlanScene scene;
+    std::mt19937 random(7);
+    std::uniform_real_distribution<double> x(0, 5000), y(0, 3000), r(2, 30);
+    for (int i = 0; i < 20000; ++i) {
+        const stp::Vec3 c(x(random), y(random), 0);
+        const double radius = r(random);
+        for (int k = 0; k < 72; ++k) {
+            const double a0 = 2 * stp::kPi * k / 72, a1 = 2 * stp::kPi * (k + 1) / 72;
+            scene.mesh.addSegment(c + stp::Vec3(std::cos(a0), std::sin(a0), 0) * radius,
+                                  c + stp::Vec3(std::cos(a1), std::sin(a1), 0) * radius, true);
+        }
+        stp::CircleFeature circle;
+        circle.center = c;
+        circle.radius = radius;
+        scene.mesh.features.circles.push_back(circle);
+        const stp::Vec3 o(x(random), y(random), 0);
+        addRectangle(&scene.mesh, o, stp::Vec3(40, 0, 0), stp::Vec3(0, 25, 0));
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    scene.finish();
+    const auto t1 = std::chrono::steady_clock::now();
+    std::uniform_real_distribution<double> px(0, scene.width), py(0, scene.height);
+    stp::SnapOptions options;
+    options.plane = &scene.plane;
+    const int queries = 300;
+    for (int i = 0; i < queries; ++i) {
+        scene.pick.snap(scene.mesh, scene.camera, scene.width, scene.height, px(random), py(random), options);
+    }
+    const auto t2 = std::chrono::steady_clock::now();
+    const double buildMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const double queryMs = std::chrono::duration<double, std::milli>(t2 - t1).count() / queries;
+    std::printf("    indice %.0f ms, consulta %.3f ms\n", buildMs, queryMs);
+    CHECK(queryMs < 5.0);
+    CHECK(buildMs < 3000.0);
 }
 
 int main() {

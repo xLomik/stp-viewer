@@ -6,7 +6,7 @@ setlocal
 if not exist build mkdir build
 if not exist dist mkdir dist
 
-set ENGINE=src\engine\features.cpp src\engine\planar.cpp src\engine\step_file.cpp src\engine\step_model.cpp src\engine\surfaces.cpp src\engine\tessellate.cpp src\render\renderer.cpp src\formats\model_loader.cpp src\formats\mesh_formats.cpp src\formats\dxf.cpp src\formats\iges.cpp src\formats\embedded_preview.cpp
+set ENGINE=src\engine\features.cpp src\engine\measure.cpp src\engine\planar.cpp src\engine\step_file.cpp src\engine\step_model.cpp src\engine\surfaces.cpp src\engine\tessellate.cpp src\render\renderer.cpp src\formats\model_loader.cpp src\formats\mesh_formats.cpp src\formats\dxf.cpp src\formats\iges.cpp src\formats\embedded_preview.cpp
 set FLAGS=-std=c++17 -O2 -pthread
 set STATIC=-static -static-libgcc -static-libstdc++
 

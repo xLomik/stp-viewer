@@ -11,7 +11,7 @@ CXX_WIN=${CXX_WIN:-x86_64-w64-mingw32-g++}
 WINDRES=${WINDRES:-x86_64-w64-mingw32-windres}
 STRIP=${STRIP:-x86_64-w64-mingw32-strip}
 
-ENGINE="src/engine/features.cpp src/engine/planar.cpp src/engine/step_file.cpp src/engine/step_model.cpp src/engine/surfaces.cpp src/engine/tessellate.cpp src/render/renderer.cpp src/formats/model_loader.cpp src/formats/mesh_formats.cpp src/formats/dxf.cpp src/formats/iges.cpp src/formats/embedded_preview.cpp"
+ENGINE="src/engine/features.cpp src/engine/measure.cpp src/engine/planar.cpp src/engine/step_file.cpp src/engine/step_model.cpp src/engine/surfaces.cpp src/engine/tessellate.cpp src/render/renderer.cpp src/formats/model_loader.cpp src/formats/mesh_formats.cpp src/formats/dxf.cpp src/formats/iges.cpp src/formats/embedded_preview.cpp"
 FLAGS="-std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-delete-non-virtual-dtor"
 STATIC="-static -static-libgcc -static-libstdc++"
 FLAGS="$FLAGS -pthread"
