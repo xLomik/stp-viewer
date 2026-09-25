@@ -398,7 +398,10 @@ void Frame::execute(int command) {
                 panel.refresh();
                 break;
             case kCmdStatusBar: statusVisible = !statusVisible; layout(); break;
-            case kCmdViewCube: cubeVisible = !cubeVisible; break;
+            case kCmdViewCube:
+                cubeVisible = !cubeVisible;
+                view.setCubeVisible(cubeVisible);
+                break;
             case kCmdRibbonToggle: layout(); break;
             default: break;
         }

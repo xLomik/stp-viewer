@@ -17,6 +17,7 @@ namespace {
 
 constexpr UINT WM_SCENE_READY = WM_APP + 11;
 constexpr UINT_PTR kQualityTimer = 1;
+constexpr UINT_PTR kCubeTimer = 3;
 const wchar_t* kClassName = L"StpSceneView";
 
 std::wstring utf8ToWide(const std::string& text) {
@@ -275,6 +276,53 @@ void SceneView::setPerspective(bool on) {
     if (m_plan2d || on == !m_camera.ortho) return;  // un plano solo tiene sentido en ortografica
     m_camera.ortho = !on;
     fitView();
+}
+
+void SceneView::animateTo(double yaw, double pitch, bool fit) {
+    if (m_mesh.empty() || m_plan2d) return;
+    m_camera.planView = false;
+    m_animYaw[0] = m_camera.yaw;
+    m_animPitch[0] = m_camera.pitch;
+    m_animYaw[1] = yaw;
+    m_animPitch[1] = pitch;
+    m_animStart = GetTickCount64();
+    m_animating = true;
+    m_animFit = fit;
+    SetTimer(m_hwnd, kCubeTimer, 15, nullptr);
+}
+
+// Raton sobre el cubo de vistas: hover, clic en cara/arista/esquina e Inicio. Devuelve
+// true si el mensaje no debe llegar a las herramientas (arrastrar desde el cubo orbita).
+bool SceneView::cubeMessage(UINT msg, LPARAM lparam) {
+    if (!m_cubeVisible || m_mesh.empty() || m_image) return false;
+    if (msg != WM_MOUSEMOVE && msg != WM_LBUTTONDOWN && msg != WM_LBUTTONUP && msg != WM_MOUSELEAVE) return false;
+    const POINT p = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    ui::CubeRegion region;
+    const RECT bounds = cubeBounds();
+    const ui::ViewCube::Hit hit =
+        msg == WM_MOUSELEAVE || (m_orbiting && msg == WM_MOUSEMOVE) ? ui::ViewCube::Hit::None
+                                                                    : m_cube.hitTest(m_camera, m_plan2d, bounds, p, &region);
+    if (m_cube.setHover(hit, region)) InvalidateRect(m_hwnd, &bounds, FALSE);
+    if (msg == WM_LBUTTONDOWN) {
+        m_cubePress = hit != ui::ViewCube::Hit::None;
+        m_cubeDown = p;
+        return m_cubePress;
+    }
+    if (msg == WM_LBUTTONUP && m_cubePress) {
+        m_cubePress = false;
+        if (std::abs(p.x - m_cubeDown.x) < 4 && std::abs(p.y - m_cubeDown.y) < 4) {
+            if (hit == ui::ViewCube::Hit::Home) {
+                if (m_plan2d) fitView();
+                else animateTo(-0.7853982, 0.5235988, true);
+            } else if (hit == ui::ViewCube::Hit::Region) {
+                double yaw = 0, pitch = 0;
+                ui::cubeOrientation(region, &yaw, &pitch);
+                animateTo(yaw, pitch, false);
+            }
+        }
+        return true;
+    }
+    return hit != ui::ViewCube::Hit::None;
 }
 
 int SceneView::zoomPercent() const {
@@ -693,7 +741,7 @@ void SceneView::drawScene(HDC dc) {
         return;
     }
 
-    if (!m_frameValid && !m_mesh.empty()) render(m_orbiting || m_panning);
+    if (!m_frameValid && !m_mesh.empty()) render(m_orbiting || m_panning || m_animating);
 
     if (m_frameValid && m_frame.width > 0 && !m_mesh.empty()) {
         BITMAPINFO info = {};
@@ -728,6 +776,12 @@ void SceneView::drawScene(HDC dc) {
     }
 
     drawOverlay(dc);
+    if (m_cubeVisible && !m_mesh.empty() && ensureGdiplus()) {
+        Gdiplus::Graphics g(dc);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+        m_cube.draw(g, m_camera, m_plan2d, cubeBounds(), m_dpi, m_hostColors && isLight(m_hostBackground));
+    }
 }
 
 void SceneView::loadMarks() {
@@ -856,7 +910,14 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
     } else if (msg == WM_MOUSELEAVE) {
         m_trackingMouse = false;
     }
-    if (m_tools && !m_mesh.empty() && m_tools->handle(msg, wparam, lparam)) {
+    const bool onCube = cubeMessage(msg, lparam);
+    if (onCube && msg == WM_LBUTTONUP) {
+        ReleaseCapture();
+        m_orbiting = m_panning = false;
+        requestQualityPass();
+        return 0;
+    }
+    if (!onCube && m_tools && !m_mesh.empty() && m_tools->handle(msg, wparam, lparam)) {
         return msg == WM_SETCURSOR ? TRUE : 0;
     }
     switch (msg) {
@@ -955,6 +1016,20 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_TIMER:
+            if (wparam == kCubeTimer) {
+                const double t = (GetTickCount64() - m_animStart) / 250.0;
+                ui::interpolateOrientation(m_animYaw[0], m_animPitch[0], m_animYaw[1], m_animPitch[1], t, &m_camera.yaw,
+                                           &m_camera.pitch);
+                m_frameValid = false;
+                if (t >= 1.0) {
+                    KillTimer(m_hwnd, kCubeTimer);
+                    m_animating = false;
+                    if (m_animFit) fitView();
+                    requestQualityPass();
+                }
+                invalidate();
+                return 0;
+            }
             if (wparam == kQualityTimer) {
                 KillTimer(m_hwnd, kQualityTimer);
                 if (!m_orbiting && !m_panning && !m_mesh.empty() &&

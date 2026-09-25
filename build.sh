@@ -13,7 +13,7 @@ STRIP=${STRIP:-x86_64-w64-mingw32-strip}
 
 ENGINE="src/export/pdf_writer.cpp src/engine/features.cpp src/engine/markup.cpp src/engine/measure.cpp src/engine/planar.cpp src/engine/step_file.cpp src/engine/step_model.cpp src/engine/surfaces.cpp src/engine/tessellate.cpp src/render/renderer.cpp src/formats/model_loader.cpp src/formats/mesh_formats.cpp src/formats/dxf.cpp src/formats/iges.cpp src/formats/embedded_preview.cpp src/ui/ribbon_layout.cpp src/ui/view_cube_math.cpp src/ui/recent_files.cpp"
 FLAGS="-std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-delete-non-virtual-dtor"
-VIEWER_UI="src/viewer/ui/theme.cpp src/viewer/ui/icons.cpp src/viewer/ui/commands.cpp src/viewer/ui/tooltip.cpp src/viewer/ui/popup_menu.cpp src/viewer/ui/ribbon.cpp src/viewer/ui/status_bar.cpp src/viewer/ui/side_panel.cpp src/viewer/ui/start_page.cpp"
+VIEWER_UI="src/viewer/ui/theme.cpp src/viewer/ui/icons.cpp src/viewer/ui/commands.cpp src/viewer/ui/tooltip.cpp src/viewer/ui/popup_menu.cpp src/viewer/ui/ribbon.cpp src/viewer/ui/status_bar.cpp src/viewer/ui/side_panel.cpp src/viewer/ui/start_page.cpp src/viewer/ui/view_cube.cpp"
 STATIC="-static -static-libgcc -static-libstdc++"
 FLAGS="$FLAGS -pthread"
 

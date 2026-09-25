@@ -12,6 +12,7 @@
 #include "../formats/formats.h"
 #include "../render/renderer.h"
 #include "markup_tools.h"
+#include "ui/view_cube.h"
 
 namespace stp {
 
@@ -78,6 +79,14 @@ public:
         invalidate();
     }
     int zoomPercent() const;  // 100 = encuadre completo
+    // Cubo de vistas arriba a la derecha (brujula en los planos 2D).
+    void setCubeVisible(bool visible) {
+        m_cubeVisible = visible;
+        invalidate();
+    }
+    bool cubeVisible() const { return m_cubeVisible; }
+    // Giro animado (250 ms) hasta la orientacion dada; fit: encuadra al terminar.
+    void animateTo(double yaw, double pitch, bool fit);
     const Mesh& mesh() const { return m_mesh; }
     const LoadStats& stats() const { return m_stats; }
     const PlanarInfo& planar() const { return m_planar; }
@@ -179,6 +188,17 @@ private:
     bool m_toolsEnabled = false;
 
     bool m_trackingMouse = false;
+    ui::ViewCube m_cube;
+    bool m_cubeVisible = true;
+    bool cubeMessage(UINT msg, LPARAM lparam);
+    RECT cubeBounds() const { return m_cube.bounds(m_width, m_height, m_dpi, m_compact); }
+    bool m_cubePress = false;
+    POINT m_cubeDown = {0, 0};
+    double m_animYaw[2] = {0, 0};
+    double m_animPitch[2] = {0, 0};
+    ULONGLONG m_animStart = 0;
+    bool m_animating = false;
+    bool m_animFit = false;
     bool m_orbiting = false;
     bool m_panning = false;
     POINT m_lastMouse = {};
