@@ -633,7 +633,16 @@ std::vector<SnapResult> PickIndex::snapAll(const Mesh& mesh, const Camera& camer
         if (pa != pb) return pa < pb;
         return a.pixels < b.pixels;
     });
-    return found;
+    // Un mismo punto con varios nombres (extremo, cuadrante y medio de un arco) se
+    // ofrece una sola vez, con el de mayor prioridad: Tab salta a otro punto.
+    std::vector<SnapResult> distinct;
+    for (const SnapResult& s : found) {
+        const bool repeated = std::any_of(distinct.begin(), distinct.end(), [&](const SnapResult& d) {
+            return distance(d.point, s.point) <= tolerance;
+        });
+        if (!repeated) distinct.push_back(s);
+    }
+    return distinct;
 }
 
 // --- Calculos ----------------------------------------------------------------

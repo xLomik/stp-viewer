@@ -139,39 +139,103 @@ void MarkupTools::showMessage(const std::wstring& text, unsigned milliseconds) {
     m_host->markupRedraw();
 }
 
-std::wstring MarkupTools::hint() const {
+std::wstring MarkupTools::statusText() const {
     if (!m_message.empty() && GetTickCount64() < m_messageUntil) return m_message;
-    const std::wstring tail = L"   (Shift: sin enganche, Esc: terminar)";
+    const std::wstring tail = L"   (Tab: otro enganche, Shift: sin enganche, Esc: terminar)";
     switch (m_tool) {
         case Tool::Distance:
             return (m_pending.empty() ? L"Distancia: clic en el primer punto" : L"Distancia: clic en el segundo punto") + tail;
-        case Tool::Radius: return L"Radio: clic sobre un circulo, un arco o un agujero" + tail;
+        case Tool::Radius: return L"Radio: clic sobre un círculo, un arco o un agujero" + tail;
         case Tool::Angle:
-            return (m_pending.empty() ? L"Angulo: clic en tres puntos (vertice al medio) o en dos lineas"
-                                      : L"Angulo: siguiente punto o segunda linea") + tail;
-        case Tool::Area: return L"Area: clic dentro de un contorno cerrado o sobre una cara" + tail;
+            return (m_pending.empty() ? L"Ángulo: clic en tres puntos (vértice al medio) o en dos líneas"
+                                      : L"Ángulo: siguiente punto o segunda línea") + tail;
+        case Tool::Area: return L"Área: clic dentro de un contorno cerrado o sobre una cara   (Esc: terminar)";
         case Tool::Highlight: return L"Resaltador: arrastrar   (Q: color, Esc: terminar)";
-        case Tool::Underline: return L"Subrayado: arrastrar   (Shift: recto, Q: color, Esc: terminar)";
-        case Tool::Pen: return L"Lapiz: arrastrar   (Q: color, Esc: terminar)";
-        case Tool::Rectangle: return L"Rectangulo: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
+        case Tool::Underline: return L"Subrayado: arrastrar   (Shift u Orto: recto, Q: color, Esc: terminar)";
+        case Tool::Pen: return L"Lápiz: arrastrar   (Q: color, Esc: terminar)";
+        case Tool::Rectangle: return L"Rectángulo: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
         case Tool::Ellipse: return L"Elipse: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
-        case Tool::Cloud: return L"Nube de revision: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
+        case Tool::Cloud: return L"Nube de revisión: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
         case Tool::Note:
-            return (m_noteAnchored ? L"Nota: clic donde va el texto" : L"Nota: clic en el punto a senalar") +
+            return (m_noteAnchored ? L"Nota: clic donde va el texto" : L"Nota: clic en el punto a señalar") +
                    std::wstring(L"   (Esc: terminar)");
         default: return std::wstring();
     }
 }
 
-SnapResult MarkupTools::snapAt(int x, int y) const {
+void MarkupTools::setSnapSettings(const SnapSettings& settings) {
+    m_snap = settings;
+    m_snap.modes &= kSnapAllModes;
+    m_candidates.clear();
+    m_candidate = 0;
+    m_host->markupChanged();
+    m_host->markupRedraw();
+}
+
+void MarkupTools::toggleSnap() {
+    m_snap.enabled = !m_snap.enabled;
+    showMessage(m_snap.enabled ? L"Enganche activado" : L"Enganche desactivado", 1500);
+    m_host->markupChanged();
+}
+
+void MarkupTools::toggleOrtho() {
+    const bool on = m_snap.constraint.kind != ConstraintKind::Ortho;
+    m_snap.constraint.kind = on ? ConstraintKind::Ortho : ConstraintKind::None;
+    showMessage(on ? L"Orto activado" : L"Orto desactivado", 1500);
+    m_host->markupChanged();
+}
+
+void MarkupTools::togglePolar() {
+    const bool on = m_snap.constraint.kind != ConstraintKind::Polar;
+    m_snap.constraint.kind = on ? ConstraintKind::Polar : ConstraintKind::None;
+    showMessage(on ? L"Polar activado (" + widen(formatAngle(m_snap.constraint.polarStepDegrees)) + L")"
+                   : std::wstring(L"Polar desactivado"),
+                1500);
+    m_host->markupChanged();
+}
+
+SnapResult MarkupTools::snapAt(int x, int y) {
+    const Mesh& mesh = m_host->markupMesh();
+    const Camera& camera = m_host->markupCamera();
+    const int w = m_host->markupWidth(), h = m_host->markupHeight();
     SnapOptions options;
     // El area no engancha: un punto de arista esta en dos caras y se mediria la
     // que no se ve. Se usa el punto de la superficie bajo el cursor.
-    options.snapping = GetKeyState(VK_SHIFT) >= 0 && m_tool != Tool::Area;
+    options.snapping = m_snap.enabled && GetKeyState(VK_SHIFT) >= 0 && m_tool != Tool::Area;
     options.plane = m_host->markupPlane();
     options.radiusPixels = 8.0 * m_host->markupDpi() / 96.0;
-    return m_host->markupPick().snap(m_host->markupMesh(), m_host->markupCamera(), m_host->markupWidth(),
-                                     m_host->markupHeight(), x, y, options);
+    options.modes = m_snap.modes;
+    // Radio y angulo entre rectas se eligen tocando la arista.
+    if (m_tool == Tool::Radius || m_tool == Tool::Angle) options.modes |= kSnapNearest;
+    const Vec3 from = m_pending.empty() ? Vec3() : m_pending.back().point;
+    const bool second = !m_pending.empty() && (m_tool == Tool::Distance || m_tool == Tool::Angle);
+    if (second) options.from = &from;
+
+    std::vector<SnapResult> all = m_host->markupPick().snapAll(mesh, camera, w, h, x, y, options);
+    const bool same = all.size() == m_candidates.size() &&
+                      std::equal(all.begin(), all.end(), m_candidates.begin(), [](const SnapResult& a, const SnapResult& b) {
+                          return a.kind == b.kind && distance(a.point, b.point) < 1e-12;
+                      });
+    if (!same) m_candidate = 0;
+    m_candidates = std::move(all);
+    SnapResult snap = m_candidates.empty()
+                          ? m_host->markupPick().surfaceAt(mesh, camera, w, h, x, y, options.plane)
+                          : m_candidates[std::min(m_candidate, m_candidates.size() - 1)];
+
+    // La restriccion se aplica al punto ya enganchado (segundo clic de distancia y angulo).
+    // Si el punto ya la cumple conserva su tipo: la ranura con Orto sigue siendo "Cuadrante".
+    m_constrained = ConstrainedPoint();
+    if (snap.kind != SnapKind::None && second) {
+        m_constrained = applyConstraint(from, snap.point, m_snap.constraint, camera, options.plane);
+        if (m_constrained.applied && distance(m_constrained.point, snap.point) > 1e-9 * std::max(1.0, mesh.bounds.diagonal())) {
+            snap.point = m_constrained.point;
+            snap.kind = options.plane ? SnapKind::OnPlane : SnapKind::OnFace;
+            snap.segment = snap.circle = -1;
+        }
+    }
+    m_cursorValid = snap.kind != SnapKind::None;
+    m_cursorPoint = snap.point;
+    return snap;
 }
 
 void MarkupTools::pushUndo() {
@@ -542,7 +606,7 @@ void MarkupTools::drawNote(void* graphics, const Mark& mark, const Camera& camer
 
 void MarkupTools::clickMeasure(const SnapResult& snap) {
     if (snap.kind == SnapKind::None) {
-        showMessage(L"Aqui no hay nada que medir");
+        showMessage(L"Aqu\u00ed no hay nada que medir");
         return;
     }
     Mark mark;
@@ -645,13 +709,20 @@ bool MarkupTools::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             if (isMeasureTool() || (m_tool == Tool::Note && !m_noteAnchored)) {
                 m_hover = snapAt(x, y);
                 m_host->markupRedraw();
-            } else if (m_tool == Tool::Note) {
-                m_host->markupRedraw();  // linea de goma de la nota
+            } else {
+                // Solo para las coordenadas de la barra de estado: la cara o el plano.
+                const SnapResult s = m_host->markupPick().surfaceAt(m_host->markupMesh(), m_host->markupCamera(),
+                                                                    m_host->markupWidth(), m_host->markupHeight(), x, y,
+                                                                    m_host->markupPlane());
+                m_cursorValid = s.kind != SnapKind::None;
+                m_cursorPoint = s.point;
+                if (m_tool == Tool::Note) m_host->markupRedraw();  // linea de goma de la nota
             }
             if (m_sketching) {
                 POINT p = {x, y};
-                if (m_tool == Tool::Underline && GetKeyState(VK_SHIFT) < 0) {
-                    // Shift: horizontal o vertical, lo que este mas cerca.
+                if (m_tool == Tool::Underline &&
+                    (GetKeyState(VK_SHIFT) < 0 || m_snap.constraint.kind == ConstraintKind::Ortho)) {
+                    // Shift u Orto: horizontal o vertical, lo que este mas cerca.
                     if (std::abs(p.x - m_stroke[0].x) >= std::abs(p.y - m_stroke[0].y)) p.y = m_stroke[0].y;
                     else p.x = m_stroke[0].x;
                 }
@@ -724,7 +795,32 @@ bool MarkupTools::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             return m_tool != Tool::Navigate;
 
+        case WM_SYSKEYDOWN:
+            if (wparam == VK_F10) {  // sin esto F10 abre el menu de la ventana
+                togglePolar();
+                return true;
+            }
+            return false;
+
+        case WM_MOUSELEAVE:
+            m_cursorValid = false;
+            m_mouse = {-1, -1};
+            m_hover = SnapResult();
+            m_candidates.clear();
+            m_host->markupRedraw();
+            m_host->markupChanged();
+            return false;
+
         case WM_KEYDOWN: {
+            if (wparam == VK_F3) { toggleSnap(); return true; }
+            if (wparam == VK_F8) { toggleOrtho(); return true; }
+            if (wparam == VK_TAB && wantsTab()) {
+                const std::size_t n = m_candidates.size();
+                m_candidate = GetKeyState(VK_SHIFT) < 0 ? (m_candidate + n - 1) % n : (m_candidate + 1) % n;
+                if (m_mouse.x >= 0) m_hover = snapAt(m_mouse.x, m_mouse.y);
+                m_host->markupRedraw();
+                return true;
+            }
             const bool control = GetKeyState(VK_CONTROL) < 0;
             if (control && wparam == 'Z') { undo(); return true; }
             if (control && wparam == 'Y') { redo(); return true; }
@@ -797,6 +893,11 @@ MarkupTools::Value MarkupTools::evaluate(const Mark& mark) const {
             const DistanceResult d = measureDistance(mark.points[0], mark.points[1], plane);
             v.ok = true;
             v.label = widen(formatLength(d.total, unit));
+            // Cota sobre un solo eje (Orto): "Vertical: 70 mm", sin componentes que sobran.
+            if (const char* axis = distanceAxisName(mark.points[0], mark.points[1], plane, tolerance * 1e-3)) {
+                v.label = widen(axis) + L": " + v.label;
+                break;
+            }
             v.detail = L"\u0394X " + widen(formatNumber(d.delta.x, 3)) + L"   \u0394Y " + widen(formatNumber(d.delta.y, 3));
             if (!plane) v.detail += L"   \u0394Z " + widen(formatNumber(d.delta.z, 3));
             break;
@@ -854,7 +955,7 @@ std::wstring MarkupTools::describe(const Mark& mark) const {
     switch (mark.kind) {
         case MarkKind::Distance: return L"Distancia  " + v.label;
         case MarkKind::Radius: return L"Radio  " + v.label + L"  " + v.detail;
-        case MarkKind::Angle: return L"Angulo  " + v.label;
+        case MarkKind::Angle: return L"\u00c1ngulo  " + v.label;
         case MarkKind::Area: return L"Area  " + v.label + L"  " + v.detail;
         case MarkKind::Note: return L"Nota: " + widen(mark.text);
         case MarkKind::Highlight: return L"Resaltado";
@@ -997,35 +1098,105 @@ void MarkupTools::drawMeasure(void* graphics, const Mark& mark, const Camera& ca
     }
 }
 
+void drawSnapGlyph(void* graphics, SnapKind kind, float x, float y, float s, std::uint32_t argb, float width) {
+    Gdiplus::Graphics& g = *static_cast<Gdiplus::Graphics*>(graphics);
+    Gdiplus::Pen pen(gdiColor(argb), width);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    switch (kind) {
+        case SnapKind::Endpoint: g.DrawRectangle(&pen, x - s, y - s, 2 * s, 2 * s); break;
+        case SnapKind::Center: g.DrawEllipse(&pen, x - s, y - s, 2 * s, 2 * s); break;
+        case SnapKind::Midpoint: {
+            const Gdiplus::PointF tri[3] = {{x, y - s}, {x + s, y + s * 0.8f}, {x - s, y + s * 0.8f}};
+            g.DrawPolygon(&pen, tri, 3);
+            break;
+        }
+        case SnapKind::Quadrant: {
+            const Gdiplus::PointF diamond[4] = {{x, y - s}, {x + s, y}, {x, y + s}, {x - s, y}};
+            g.DrawPolygon(&pen, diamond, 4);
+            break;
+        }
+        case SnapKind::Intersection:
+            g.DrawLine(&pen, x - s, y - s, x + s, y + s);
+            g.DrawLine(&pen, x - s, y + s, x + s, y - s);
+            break;
+        case SnapKind::Extension: {
+            pen.SetDashStyle(Gdiplus::DashStyleDash);
+            g.DrawLine(&pen, x - s, y - s, x + s, y + s);
+            g.DrawLine(&pen, x - s, y + s, x + s, y - s);
+            break;
+        }
+        case SnapKind::Perpendicular: {
+            // Escuadra: la L y el cuadradito del angulo recto.
+            g.DrawLine(&pen, x - s, y - s, x - s, y + s);
+            g.DrawLine(&pen, x - s, y + s, x + s, y + s);
+            g.DrawLine(&pen, x - s, y, x, y);
+            g.DrawLine(&pen, x, y, x, y + s);
+            break;
+        }
+        case SnapKind::Tangent:
+            g.DrawEllipse(&pen, x - s * 0.8f, y - s * 0.6f, 1.6f * s, 1.6f * s);
+            g.DrawLine(&pen, x - s * 1.3f, y - s, x + s * 1.3f, y - s);
+            break;
+        case SnapKind::OnEdge: {
+            // Reloj de arena: dos triangulos unidos por el vertice.
+            const Gdiplus::PointF glass[5] = {{x - s, y - s}, {x + s, y - s}, {x - s, y + s}, {x + s, y + s}, {x - s, y - s}};
+            g.DrawLines(&pen, glass, 5);
+            break;
+        }
+        default: {
+            Gdiplus::SolidBrush dot(gdiColor(argb));
+            g.FillEllipse(&dot, x - s / 2, y - s / 2, s, s);
+            break;
+        }
+    }
+}
+
+namespace {
+
+// Rotulo chico de la interfaz (grafito) junto a un punto; se corre para no salirse.
+void drawTag(Gdiplus::Graphics& g, float x, float y, const std::wstring& text, double dpi, int width, int height) {
+    if (text.empty()) return;
+    const std::unique_ptr<Gdiplus::Font> font = uiFont(12.0 * dpi, Gdiplus::FontStyleRegular);
+    Gdiplus::RectF box;
+    g.MeasureString(text.c_str(), -1, font.get(), Gdiplus::PointF(0, 0), &box);
+    const float pad = static_cast<float>(4 * dpi);
+    const float w = box.Width + 2 * pad, h = box.Height + pad;
+    float left = x + static_cast<float>(10 * dpi), top = y + static_cast<float>(10 * dpi);
+    if (left + w > width) left = x - static_cast<float>(10 * dpi) - w;
+    if (top + h > height) top = y - static_cast<float>(10 * dpi) - h;
+    const float r = h / 2;
+    Gdiplus::GraphicsPath path;
+    path.AddArc(left, top, 2 * r, h, 90, 180);
+    path.AddArc(left + w - 2 * r, top, 2 * r, h, 270, 180);
+    path.CloseFigure();
+    Gdiplus::SolidBrush fill(Gdiplus::Color(235, 0x26, 0x2B, 0x32));
+    Gdiplus::Pen border(Gdiplus::Color(255, 0x36, 0x3C, 0x45), 1.0f);
+    g.FillPath(&fill, &path);
+    g.DrawPath(&border, &path);
+    Gdiplus::SolidBrush ink(Gdiplus::Color(255, 0xE6, 0xE9, 0xED));
+    g.DrawString(text.c_str(), -1, font.get(), Gdiplus::PointF(left + pad, top + pad / 2), &ink);
+}
+
+}  // namespace
+
 void MarkupTools::drawSnap(void* graphics, double scale) const {
     if (m_hover.kind == SnapKind::None) return;
     Gdiplus::Graphics& g = *static_cast<Gdiplus::Graphics*>(graphics);
     Gdiplus::PointF c;
     if (!toScreen(m_host->markupCamera(), m_host->markupWidth(), m_host->markupHeight(), m_hover.point, &c)) return;
     const double dpi = m_host->markupDpi() / 96.0;
-    const Gdiplus::REAL s = static_cast<Gdiplus::REAL>(5 * dpi * scale);
-    Gdiplus::Pen pen(Gdiplus::Color(255, 0, 200, 83), static_cast<Gdiplus::REAL>(2 * dpi * scale));
-    switch (m_hover.kind) {
-        case SnapKind::Endpoint: g.DrawRectangle(&pen, c.X - s, c.Y - s, 2 * s, 2 * s); break;
-        case SnapKind::Center:
-            g.DrawEllipse(&pen, c.X - s, c.Y - s, 2 * s, 2 * s);
-            g.DrawLine(&pen, c.X - s, c.Y, c.X + s, c.Y);
-            g.DrawLine(&pen, c.X, c.Y - s, c.X, c.Y + s);
-            break;
-        case SnapKind::Midpoint: {
-            const Gdiplus::PointF tri[3] = {{c.X, c.Y - s}, {c.X + s, c.Y + s}, {c.X - s, c.Y + s}};
-            g.DrawPolygon(&pen, tri, 3);
-            break;
+    drawSnapGlyph(&g, m_hover.kind, c.X, c.Y, static_cast<float>(5.5 * dpi * scale), 0xFF00C853,
+                  static_cast<float>(2 * dpi * scale));
+    const char* name = snapKindName(m_hover.kind);
+    if (name && *name) {
+        std::wstring text = widen(name);
+        if (m_candidates.size() > 1) {
+            text += L"  " + std::to_wstring(std::min(m_candidate, m_candidates.size() - 1) + 1) + L"/" +
+                    std::to_wstring(m_candidates.size());
         }
-        case SnapKind::OnEdge:
-            g.DrawLine(&pen, c.X - s, c.Y - s, c.X + s, c.Y + s);
-            g.DrawLine(&pen, c.X - s, c.Y + s, c.X + s, c.Y - s);
-            break;
-        default: {
-            Gdiplus::SolidBrush dot(Gdiplus::Color(255, 0, 200, 83));
-            g.FillEllipse(&dot, c.X - s / 2, c.Y - s / 2, s, s);
-            break;
-        }
+        drawTag(g, c.X, c.Y, text, dpi * scale, m_host->markupWidth(), m_host->markupHeight());
     }
 }
 
@@ -1083,6 +1254,25 @@ void MarkupTools::draw(HDC dc, const Camera& camera, int width, int height, doub
             Gdiplus::Pen rubber(gdiColor(m_color), static_cast<Gdiplus::REAL>(1.5 * dpi));
             rubber.SetDashStyle(Gdiplus::DashStyleDash);
             g.DrawLine(&rubber, a, Gdiplus::PointF(static_cast<Gdiplus::REAL>(m_mouse.x), static_cast<Gdiplus::REAL>(m_mouse.y)));
+        }
+    }
+
+    // Restriccion: linea guia punteada a lo largo de toda la vista y su rotulo.
+    if (!m_pending.empty() && m_hover.kind != SnapKind::None && m_constrained.applied) {
+        Gdiplus::PointF a, b;
+        if (toScreen(camera, width, height, m_pending.back().point, &a) &&
+            toScreen(camera, width, height, m_constrained.point, &b)) {
+            const float dx = b.X - a.X, dy = b.Y - a.Y, len = std::hypot(dx, dy);
+            if (len > 0.5f) {
+                const float reach = static_cast<float>(width + height) / len;
+                Gdiplus::Pen guide(Gdiplus::Color(200, 0x2F, 0x80, 0xED), static_cast<Gdiplus::REAL>(1.2 * dpi));
+                guide.SetDashStyle(Gdiplus::DashStyleDash);
+                g.DrawLine(&guide, a.X - dx * reach, a.Y - dy * reach, a.X + dx * reach, a.Y + dy * reach);
+            }
+            const std::wstring tag = m_constrained.axisName ? widen(m_constrained.axisName)
+                                                            : widen(formatAngle(m_constrained.angleDegrees));
+            drawTag(g, static_cast<float>(m_mouse.x), static_cast<float>(m_mouse.y) + static_cast<float>(22 * dpi), tag, dpi,
+                    width, height);
         }
     }
 

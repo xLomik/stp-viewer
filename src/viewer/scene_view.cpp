@@ -573,8 +573,8 @@ void SceneView::drawOverlay(HDC dc) {
             hint += m_tools->editing() ? L"   |   M: medir   |   H U N R E C L: marcar   |   Ctrl+Z: deshacer"
                                        : L"   |   M: medir";
         }
-        if (m_tools && !m_tools->hint().empty()) {
-            hint = m_tools->hint();
+        if (m_tools && !m_tools->statusText().empty()) {
+            hint = m_tools->statusText();
             SetTextColor(dc, m_textColor);
         }
         DrawTextW(dc, hint.c_str(), -1, &help, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -795,6 +795,13 @@ void SceneView::markupSetCamera(const Camera& camera) {
 }
 
 LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
+    // Aviso de salida del cursor: las coordenadas y el marcador se borran.
+    if (msg == WM_MOUSEMOVE && !m_trackingMouse) {
+        TRACKMOUSEEVENT track = {sizeof(track), TME_LEAVE, m_hwnd, 0};
+        m_trackingMouse = TrackMouseEvent(&track) != FALSE;
+    } else if (msg == WM_MOUSELEAVE) {
+        m_trackingMouse = false;
+    }
     if (m_tools && !m_mesh.empty() && m_tools->handle(msg, wparam, lparam)) {
         return msg == WM_SETCURSOR ? TRUE : 0;
     }
@@ -940,7 +947,8 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
 
         case WM_GETDLGCODE:
-            return DLGC_WANTARROWS | DLGC_WANTCHARS;
+            // Tab solo cuando recorre candidatos de enganche; si no, mueve el foco.
+            return DLGC_WANTARROWS | DLGC_WANTCHARS | (m_tools && m_tools->wantsTab() ? DLGC_WANTTAB : 0);
 
         default:
             break;

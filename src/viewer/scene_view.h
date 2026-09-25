@@ -144,6 +144,7 @@ private:
     std::function<void()> m_markupListener;
     bool m_toolsEnabled = false;
 
+    bool m_trackingMouse = false;
     bool m_orbiting = false;
     bool m_panning = false;
     POINT m_lastMouse = {};

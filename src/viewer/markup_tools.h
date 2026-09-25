@@ -15,6 +15,17 @@ namespace stp {
 
 enum class Tool { Navigate, Distance, Radius, Angle, Area, Highlight, Underline, Note, Rectangle, Ellipse, Cloud, Pen };
 
+// Enganche a objetos (F3), modos y restriccion de acotado (Orto F8, Polar F10).
+struct SnapSettings {
+    bool enabled = true;
+    unsigned modes = kSnapDefaultModes;
+    SnapConstraint constraint;
+};
+
+// Glifo del marcador de enganche centrado en (x, y), de lado 2*size. graphics es
+// un Gdiplus::Graphics*. Lo usan los marcadores y los iconos de la interfaz.
+void drawSnapGlyph(void* graphics, SnapKind kind, float x, float y, float size, std::uint32_t argb, float width);
+
 // Lo que las herramientas necesitan de la vista que las hospeda.
 class MarkupHost {
 public:
@@ -48,7 +59,21 @@ public:
 
     bool handle(UINT msg, WPARAM wparam, LPARAM lparam);
     void draw(HDC dc, const Camera& camera, int width, int height, double scale, bool interactive) const;
-    std::wstring hint() const;
+    // Mensaje vigente o, si no hay, la ayuda de la herramienta activa.
+    std::wstring statusText() const;
+
+    const SnapSettings& snapSettings() const { return m_snap; }
+    void setSnapSettings(const SnapSettings& settings);
+    void toggleSnap();
+    void toggleOrtho();
+    void togglePolar();
+    // Tab recorre los candidatos: la vista lo pide solo cuando hay mas de uno.
+    bool wantsTab() const { return isMeasureTool() && m_candidates.size() > 1; }
+    // Punto del modelo bajo el cursor (para la barra de estado).
+    bool cursorPoint(Vec3* point) const {
+        if (m_cursorValid) *point = m_cursorPoint;
+        return m_cursorValid;
+    }
 
     const MarkupDocument& document() const { return m_doc; }
     void setDocument(const MarkupDocument& doc);
@@ -109,7 +134,7 @@ private:
     HWND m_edit = nullptr;
     WNDPROC m_editDefault = nullptr;
     int m_editMark = -1;
-    SnapResult snapAt(int x, int y) const;
+    SnapResult snapAt(int x, int y);
     void addMark(Mark mark);
     void clickMeasure(const SnapResult& snap);
     const Value& valueOf(const Mark& mark) const;
@@ -131,6 +156,13 @@ private:
     std::wstring m_message;
     ULONGLONG m_messageUntil = 0;
     mutable std::unordered_map<int, Value> m_values;
+
+    SnapSettings m_snap;
+    std::vector<SnapResult> m_candidates;  // bajo el cursor, en el orden de Tab
+    std::size_t m_candidate = 0;
+    ConstrainedPoint m_constrained;        // restriccion aplicada al punto en curso
+    bool m_cursorValid = false;
+    Vec3 m_cursorPoint;
 };
 
 }  // namespace stp

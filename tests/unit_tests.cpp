@@ -1058,18 +1058,34 @@ TEST(snap_slot_length_and_width_from_quadrants) {
     CHECK_NEAR(stp::distance(left.point, right.point), 20.0, 1e-9);
 }
 
-TEST(snap_tab_order_puts_endpoint_before_quadrant) {
+TEST(snap_candidates_are_distinct_points) {
+    // Extremo, cuadrante y medio de arco caen en el mismo punto: Tab no lo repite.
     PlanScene scene;
     CHECK(loadModelFile("tests/samples/plano_brida.dxf", &scene.mesh));
     scene.finish();
-    const std::vector<stp::SnapResult> all = scene.snapAllNear(stp::Vec3(160, 45, 0), 0, 0);
+    for (const stp::Vec3& p : {stp::Vec3(160, 45, 0), stp::Vec3(170, 35, 0)}) {
+        const std::vector<stp::SnapResult> all = scene.snapAllNear(p, 0, 0);
+        CHECK(!all.empty());
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            for (std::size_t j = i + 1; j < all.size(); ++j) CHECK(stp::distance(all[i].point, all[j].point) > 1e-9);
+        }
+        CHECK(!hasKind(all, stp::SnapKind::Intersection));
+    }
+    CHECK(scene.snapAllNear(stp::Vec3(160, 45, 0), 0, 0)[0].kind == stp::SnapKind::Endpoint);
+    CHECK(scene.snapAllNear(stp::Vec3(170, 35, 0), 0, 0)[0].kind == stp::SnapKind::Quadrant);
+}
+
+TEST(snap_tab_order_puts_endpoint_before_quadrant) {
+    // Extremo (10,0) y cuadrante (10.05,0) de un circulo diminuto, a 3 px uno del otro.
+    PlanScene scene = sceneFrom(entities({{0, "LINE"}, {10, "0"}, {20, "0"}, {11, "10"}, {21, "0"},
+                                          {0, "CIRCLE"}, {10, "10.1"}, {20, "0"}, {40, "0.05"}}));
+    const std::vector<stp::SnapResult> all = scene.snapAllNear(stp::Vec3(10.03, 0, 0), 0, 0);
     CHECK(all.size() >= 2);
     if (all.size() >= 2) {
         CHECK(all[0].kind == stp::SnapKind::Endpoint);
         CHECK(all[1].kind == stp::SnapKind::Quadrant);
-        CHECK_NEAR(stp::distance(all[1].point, stp::Vec3(160, 45, 0)), 0.0, 1e-9);
+        CHECK_NEAR(stp::distance(all[1].point, stp::Vec3(10.05, 0, 0)), 0.0, 1e-9);
     }
-    CHECK(!hasKind(all, stp::SnapKind::Intersection));
 }
 
 TEST(snap_arc_midpoint) {
