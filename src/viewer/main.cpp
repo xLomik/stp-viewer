@@ -15,6 +15,7 @@
 #include "../ui/recent_files.h"
 #include "export.h"
 #include "scene_view.h"
+#include "settings.h"
 #include "ui/commands.h"
 #include "ui/popup_menu.h"
 #include "ui/ribbon.h"
@@ -138,6 +139,8 @@ struct Frame {
     void updateTitle();
     void paintTitle(HDC dc);
     void popup(const std::vector<MenuItem>& items);
+    void saveAll();
+    void setDpi(int value);
 };
 
 Frame* g_frame = nullptr;
@@ -507,7 +510,42 @@ void Frame::paintTitle(HDC dc) {
     });
 }
 
-void Frame::openFile(const std::wstring& path) {
+void Frame::saveAll() {
+    stp::ViewerSettings s;
+    if (view.tools()) s.snap = view.tools()->snapSettings();
+    s.ribbonCollapsed = ribbon.collapsed();
+    s.ribbonTab = ribbon.tab();
+    s.panelVisible = panelVisible;
+    s.panelWidth = panel.preferredWidth();
+    s.statusVisible = statusVisible;
+    s.cubeVisible = cubeVisible;
+    WINDOWPLACEMENT placement = {};
+    placement.length = sizeof(placement);
+    if (GetWindowPlacement(hwnd, &placement)) {
+        s.window = placement.rcNormalPosition;
+        s.maximized = placement.showCmd == SW_SHOWMAXIMIZED;
+    }
+    s.recent = recent.items();
+    stp::saveSettings(s);
+}
+
+void Frame::setDpi(int value) {
+    dpi = value;
+    ribbon.setDpi(dpi);
+    status.setDpi(dpi);
+    panel.setDpi(dpi);
+    start.setDpi(dpi);
+    view.setDpi(dpi);
+    layout();
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void Frame::openFile(const std::wstring& given) {
+    // Ruta completa: la de la linea de comandos puede ser relativa y los recientes
+    // tienen que servir desde cualquier carpeta.
+    wchar_t full[MAX_PATH] = {};
+    const DWORD length = GetFullPathNameW(given.c_str(), MAX_PATH, full, nullptr);
+    const std::wstring path = length > 0 && length < MAX_PATH ? std::wstring(full) : given;
     std::wstring problem;
     if (!view.saveMarks(&problem)) {
         const std::wstring question = problem + L"\n\nSi abres otro archivo, esas marcas se pierden. ¿Abrir de todos modos?";
@@ -516,6 +554,7 @@ void Frame::openFile(const std::wstring& path) {
     g_currentFile = path;
     recent.add(path);
     start.setRecent(recent.items());
+    saveAll();  // los recientes quedan guardados aunque el visor se cierre mal
     view.loadFile(path);
     layout();
     view.focus();
@@ -764,6 +803,15 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (f) f->layout();
             return 0;
 
+        case WM_DPICHANGED:
+            if (f) {
+                const RECT* suggested = reinterpret_cast<const RECT*>(lparam);
+                SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
+                             suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
+                f->setDpi(HIWORD(wparam));
+            }
+            return 0;
+
         case WM_ACTIVATE:
             if (f) {
                 RECT strip = {0, 0, 10000, f->titleHeight()};
@@ -797,6 +845,7 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 const std::wstring question = problem + L"\n\n¿Cerrar de todos modos?";
                 if (MessageBoxW(hwnd, question.c_str(), L"Visor STP", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
             }
+            if (f) f->saveAll();
             DestroyWindow(hwnd);
             return 0;
         }
@@ -839,12 +888,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     cls.lpszClassName = L"StpViewerFrame";
     if (!RegisterClassExW(&cls)) return 1;
 
+    const stp::ViewerSettings settings = stp::loadSettings();
     Frame frame;
     frame.instance = instance;
+    frame.recent.setItems(settings.recent);
+    frame.panelVisible = settings.panelVisible;
+    frame.statusVisible = settings.statusVisible;
+    frame.cubeVisible = settings.cubeVisible;
+    frame.panel.setPreferredWidth(settings.panelWidth);
     g_frame = &frame;
-    HWND hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, cls.lpszClassName, L"Visor STP",
-                                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 820,
-                                nullptr, nullptr, instance, nullptr);
+    const bool placed = settings.window.right > settings.window.left;
+    HWND hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, cls.lpszClassName, L"Visor STP", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                placed ? settings.window.left : CW_USEDEFAULT, placed ? settings.window.top : CW_USEDEFAULT,
+                                placed ? settings.window.right - settings.window.left : 1280,
+                                placed ? settings.window.bottom - settings.window.top : 820, nullptr, nullptr, instance,
+                                nullptr);
     if (!hwnd) return 1;
     frame.hwnd = hwnd;
     frame.dpi = windowDpi(hwnd);
@@ -853,6 +911,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
 
     frame.ribbon.create(instance, hwnd, [&frame](int command) { return frame.state(command); });
     frame.ribbon.setDpi(frame.dpi);
+    frame.ribbon.setTab(settings.ribbonTab);
+    frame.ribbon.setCollapsed(settings.ribbonCollapsed);
     frame.status.create(instance, hwnd);
     frame.status.setDpi(frame.dpi);
 
@@ -860,6 +920,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     frame.view.setBudget(120000);
     frame.view.enableTools(true);
     frame.view.setChrome(true);
+    frame.view.setCubeVisible(settings.cubeVisible);
+    if (frame.view.tools()) frame.view.tools()->setSnapSettings(settings.snap);
     frame.view.setMarkupListener([&frame]() {
         frame.ribbon.refresh();
         frame.panel.refresh();
@@ -877,7 +939,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     frame.start.setRecent(frame.recent.items());
     frame.layout();
 
-    ShowWindow(hwnd, showCmd);
+    ShowWindow(hwnd, settings.maximized && showCmd == SW_SHOWNORMAL ? SW_SHOWMAXIMIZED : showCmd);
     UpdateWindow(hwnd);
 
     // Con la linea vacia CommandLineToArgvW devuelve la ruta del propio programa.

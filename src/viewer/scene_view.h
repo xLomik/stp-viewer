@@ -41,6 +41,11 @@ public:
     // El panel de vista previa impone los colores del tema del Explorador.
     void setHostColors(COLORREF background, COLORREF text);
     void setCompact(bool compact);
+    // El monitor cambio de escala (WM_DPICHANGED del marco).
+    void setDpi(int dpi) {
+        m_dpi = dpi;
+        invalidate();
+    }
     // Tope de tiempo del mallado, en milisegundos (0 = sin tope).
     void setBudget(int milliseconds) { m_budgetMs = milliseconds; }
 

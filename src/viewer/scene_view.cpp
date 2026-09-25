@@ -466,6 +466,8 @@ void SceneView::applyModel(SceneLoadResult* result) {
     fitView();
     requestQualityPass();
     loadMarks();
+    // Modelo listo: la cinta, el panel y la barra de estado lo leen completo.
+    markupChanged();
 }
 
 void SceneView::fitView() {
