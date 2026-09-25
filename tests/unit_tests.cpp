@@ -1337,6 +1337,89 @@ TEST(snap_all_modes_is_fast_on_huge_drawing) {
     CHECK(queryMs < 5.0);
 }
 
+// --- Restricciones -------------------------------------------------------------------
+
+namespace {
+stp::PlanarInfo xyPlane() {
+    stp::PlanarInfo plane;
+    plane.planar = true;
+    return plane;  // u = X, v = Y, normal = Z
+}
+}  // namespace
+
+TEST(constraint_ortho_in_plan_is_horizontal_or_vertical) {
+    const stp::PlanarInfo plane = xyPlane();
+    stp::Camera camera;
+    camera.fitPlanar(plane, 1.0);
+    stp::SnapConstraint ortho;
+    ortho.kind = stp::ConstraintKind::Ortho;
+    const stp::ConstrainedPoint h = stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(10, 3, 0), ortho, camera, &plane);
+    CHECK(h.applied);
+    CHECK_NEAR(stp::distance(h.point, stp::Vec3(10, 0, 0)), 0.0, 1e-12);
+    CHECK(std::string(h.axisName) == "Horizontal");
+    const stp::ConstrainedPoint v = stp::applyConstraint(stp::Vec3(1, 1, 0), stp::Vec3(3, 10, 0), ortho, camera, &plane);
+    CHECK_NEAR(stp::distance(v.point, stp::Vec3(1, 10, 0)), 0.0, 1e-12);
+    CHECK(std::string(v.axisName) == "Vertical");
+}
+
+TEST(constraint_ortho_in_3d_follows_screen_axis) {
+    stp::Camera camera;  // isometrica: Z hacia arriba en pantalla
+    stp::SnapConstraint ortho;
+    ortho.kind = stp::ConstraintKind::Ortho;
+    const stp::ConstrainedPoint z = stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(0.2, 0.1, 5), ortho, camera, nullptr);
+    CHECK(z.applied);
+    CHECK(std::string(z.axisName) == "Z");
+    CHECK_NEAR(stp::distance(z.point, stp::Vec3(0, 0, 5)), 0.0, 1e-12);
+    const stp::ConstrainedPoint x = stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(6, 0.3, 0.2), ortho, camera, nullptr);
+    CHECK(std::string(x.axisName) == "X");
+    CHECK_NEAR(stp::distance(x.point, stp::Vec3(6, 0, 0)), 0.0, 1e-12);
+}
+
+TEST(constraint_polar_snaps_near_multiples) {
+    const stp::PlanarInfo plane = xyPlane();
+    stp::Camera camera;
+    camera.fitPlanar(plane, 1.0);
+    stp::SnapConstraint polar;
+    polar.kind = stp::ConstraintKind::Polar;
+    polar.polarStepDegrees = 45;
+    const stp::ConstrainedPoint p = stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(10, 9.5, 0), polar, camera, &plane);
+    CHECK(p.applied);
+    CHECK_NEAR(p.angleDegrees, 45.0, 1e-9);
+    CHECK_NEAR(p.point.x, p.point.y, 1e-9);
+    CHECK_NEAR(p.point.x, (10 + 9.5) / std::sqrt(2.0) / std::sqrt(2.0), 1e-9);
+    const stp::ConstrainedPoint free = stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(10, 6, 0), polar, camera, &plane);
+    CHECK(!free.applied);
+    CHECK_NEAR(stp::distance(free.point, stp::Vec3(10, 6, 0)), 0.0, 1e-12);
+    polar.polarStepDegrees = 30;
+    const stp::ConstrainedPoint down = stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(-10, -0.3, 0), polar, camera, &plane);
+    CHECK(down.applied);
+    CHECK_NEAR(down.angleDegrees, 180.0, 1e-9);
+}
+
+TEST(constraint_degenerate_inputs) {
+    const stp::PlanarInfo plane = xyPlane();
+    stp::Camera camera;
+    camera.fitPlanar(plane, 1.0);
+    stp::SnapConstraint c;
+    c.kind = stp::ConstraintKind::Ortho;
+    const stp::ConstrainedPoint same = stp::applyConstraint(stp::Vec3(1, 1, 0), stp::Vec3(1, 1, 0), c, camera, &plane);
+    CHECK(!same.applied);
+    CHECK(std::isfinite(same.point.x) && std::isfinite(same.point.y));
+    c.kind = stp::ConstraintKind::Polar;
+    c.polarStepDegrees = 0;  // angulo invalido: no aplica
+    CHECK(!stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(5, 5, 0), c, camera, &plane).applied);
+    c.kind = stp::ConstraintKind::None;
+    CHECK(!stp::applyConstraint(stp::Vec3(0, 0, 0), stp::Vec3(5, 1, 0), c, camera, &plane).applied);
+}
+
+TEST(distance_axis_name_for_saved_marks) {
+    const stp::PlanarInfo plane = xyPlane();
+    CHECK(std::string(stp::distanceAxisName(stp::Vec3(0, 0, 0), stp::Vec3(7, 0, 0), &plane, 1e-9)) == "Horizontal");
+    CHECK(std::string(stp::distanceAxisName(stp::Vec3(0, 0, 0), stp::Vec3(0, 0, 7), nullptr, 1e-9)) == "Z");
+    CHECK(stp::distanceAxisName(stp::Vec3(0, 0, 0), stp::Vec3(3, 4, 0), &plane, 1e-9) == nullptr);
+    CHECK(stp::distanceAxisName(stp::Vec3(0, 0, 0), stp::Vec3(0, 0, 0), &plane, 1e-9) == nullptr);
+}
+
 // --- Calculos de medida ---------------------------------------------------------------
 
 TEST(measure_distance_and_deltas) {

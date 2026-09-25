@@ -646,6 +646,80 @@ DistanceResult measureDistance(const Vec3& a, const Vec3& b, const PlanarInfo* p
     return result;
 }
 
+ConstrainedPoint applyConstraint(const Vec3& from, const Vec3& to, const SnapConstraint& constraint,
+                                 const Camera& camera, const PlanarInfo* plane) {
+    ConstrainedPoint result;
+    result.point = to;
+    const Vec3 d = to - from;
+    if (constraint.kind == ConstraintKind::None || length(d) < 1e-300) return result;
+    const bool planar = plane && plane->planar;
+    const Vec3 sx = planar ? plane->u : camera.right();
+    const Vec3 sy = planar ? plane->v : camera.up();
+
+    if (constraint.kind == ConstraintKind::Ortho) {
+        if (planar) {
+            const double du = dot(d, plane->u), dv = dot(d, plane->v);
+            const bool horizontal = std::fabs(du) >= std::fabs(dv);
+            result.point = from + (horizontal ? plane->u * du : plane->v * dv);
+            result.axisName = horizontal ? "Horizontal" : "Vertical";
+            result.applied = true;
+            return result;
+        }
+        // Eje del mundo cuya imagen en pantalla apunta mas parecido al cursor.
+        const Vec3 axes[3] = {Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, 1)};
+        static const char* const names[3] = {"X", "Y", "Z"};
+        const double mx = dot(d, sx), my = dot(d, sy), ml = std::hypot(mx, my);
+        int best = -1;
+        double bestCos = -1.0;
+        for (int k = 0; k < 3; ++k) {
+            const double ax = dot(axes[k], sx), ay = dot(axes[k], sy), al = std::hypot(ax, ay);
+            if (al < 0.2) continue;  // eje casi de punta: no sirve para elegir con el cursor
+            const double c = ml > 1e-300 ? std::fabs(ax * mx + ay * my) / (al * ml) : 0.0;
+            if (c > bestCos) {
+                bestCos = c;
+                best = k;
+            }
+        }
+        if (best < 0) return result;
+        result.point = from + axes[best] * dot(d, axes[best]);
+        result.axisName = names[best];
+        result.applied = true;
+        return result;
+    }
+
+    const double step = constraint.polarStepDegrees;
+    if (!(step > 0.0 && step <= 180.0)) return result;
+    const double x = dot(d, sx), y = dot(d, sy);
+    if (std::hypot(x, y) < 1e-300) return result;
+    double angle = std::atan2(y, x) * 180.0 / kPi;
+    if (angle < 0) angle += 360.0;
+    double snapped = std::round(angle / step) * step;
+    if (std::fabs(angle - snapped) > 3.0) return result;
+    if (snapped >= 360.0) snapped -= 360.0;
+    const double r = snapped * kPi / 180.0;
+    const Vec3 dir = sx * std::cos(r) + sy * std::sin(r);
+    result.point = from + dir * dot(d, dir);
+    result.angleDegrees = snapped;
+    result.applied = true;
+    return result;
+}
+
+const char* distanceAxisName(const Vec3& a, const Vec3& b, const PlanarInfo* plane, double tolerance) {
+    const Vec3 d = b - a;
+    if (length(d) <= tolerance) return nullptr;
+    if (plane && plane->planar) {
+        const double du = std::fabs(dot(d, plane->u)), dv = std::fabs(dot(d, plane->v));
+        if (dv <= tolerance) return "Horizontal";
+        if (du <= tolerance) return "Vertical";
+        return nullptr;
+    }
+    const double x = std::fabs(d.x), y = std::fabs(d.y), z = std::fabs(d.z);
+    if (y <= tolerance && z <= tolerance) return "X";
+    if (x <= tolerance && z <= tolerance) return "Y";
+    if (x <= tolerance && y <= tolerance) return "Z";
+    return nullptr;
+}
+
 double angleAt(const Vec3& a, const Vec3& vertex, const Vec3& b) {
     const Vec3 u = a - vertex, v = b - vertex;
     const double lu = length(u), lv = length(v);

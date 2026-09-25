@@ -109,6 +109,26 @@ struct DistanceResult {
 };
 DistanceResult measureDistance(const Vec3& a, const Vec3& b, const PlanarInfo* plane);
 
+// Restricciones de acotado: Orto (ejes) y Polar (multiplos de un angulo).
+enum class ConstraintKind { None, Ortho, Polar };
+struct SnapConstraint {
+    ConstraintKind kind = ConstraintKind::None;
+    double polarStepDegrees = 45.0;
+};
+struct ConstrainedPoint {
+    Vec3 point;
+    bool applied = false;
+    const char* axisName = nullptr;  // Orto: "Horizontal", "Vertical", "X", "Y" o "Z"
+    double angleDegrees = 0.0;       // Polar: angulo fijado, 0..360
+};
+// Lleva `to` a la direccion permitida desde `from`. En 2D (plane) los ejes son los
+// del dibujo; en 3D, Orto usa el eje del mundo que mas se parece en pantalla a la
+// direccion del cursor y Polar mide el angulo en el plano de la pantalla.
+ConstrainedPoint applyConstraint(const Vec3& from, const Vec3& to, const SnapConstraint& constraint,
+                                 const Camera& camera, const PlanarInfo* plane);
+// Eje sobre el que queda la distancia a->b, o nullptr si no cae sobre uno solo.
+const char* distanceAxisName(const Vec3& a, const Vec3& b, const PlanarInfo* plane, double tolerance);
+
 // Angulo en vertex entre las semirrectas hacia a y hacia b, en grados (0..180).
 double angleAt(const Vec3& a, const Vec3& vertex, const Vec3& b);
 // Angulo entre dos rectas, del lado de los puntos donde se hizo clic, en grados.
