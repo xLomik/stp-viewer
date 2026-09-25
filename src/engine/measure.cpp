@@ -41,13 +41,136 @@ Vec3 closestOnSegment(const Vec3& a, const Vec3& b, const Ray& ray) {
     return a + u * s;
 }
 
+int snapPriority(SnapKind kind) {
+    switch (kind) {
+        case SnapKind::Intersection: return 0;
+        case SnapKind::Endpoint: return 1;
+        case SnapKind::Center: return 2;
+        case SnapKind::Quadrant: return 3;
+        case SnapKind::Midpoint: return 4;
+        case SnapKind::Perpendicular: return 5;
+        case SnapKind::Tangent: return 6;
+        case SnapKind::Extension: return 7;
+        default: return 8;  // Mas cercano
+    }
+}
+
+// true si p (sobre el circulo) cae dentro del barrido del arco, con tolerance
+// en unidades del modelo medida a lo largo de la curva.
+bool inArc(const CircleFeature& c, const Vec3& p, double tolerance) {
+    if (c.full()) return true;
+    const Vec3 d = p - c.center;
+    const Vec3 inPlane = d - c.normal * dot(d, c.normal);
+    if (length(inPlane) < 1e-300) return false;
+    const Vec3 y = cross(c.normal, c.xAxis);
+    double a = std::atan2(dot(inPlane, y), dot(inPlane, c.xAxis)) - c.startAngle;
+    if (c.sweep < 0) a = -a;
+    a = std::fmod(a, 2 * kPi);
+    if (a < 0) a += 2 * kPi;
+    const double slack = c.radius > 0 ? tolerance / c.radius : 0.0;
+    return a <= std::fabs(c.sweep) + slack || a >= 2 * kPi - slack;
+}
+
+// Ejes del plano del circulo para los cuadrantes: X del mundo proyectado (o Y
+// si X es perpendicular al plano) y su giro de 90 grados.
+void quadrantAxes(const CircleFeature& c, Vec3* e1, Vec3* e2) {
+    const Vec3 n = normalize(c.normal);
+    Vec3 ref = Vec3(1, 0, 0) - n * n.x;
+    if (length(ref) < 1e-6) ref = Vec3(0, 1, 0) - n * n.y;
+    *e1 = normalize(ref);
+    *e2 = cross(n, *e1);
+}
+
+// Punto del circulo (o del arco) mas cercano al rayo. false si el circulo se ve de canto.
+bool closestOnCircle(const CircleFeature& c, const Ray& ray, Vec3* out) {
+    const double den = dot(ray.dir, c.normal);
+    if (std::fabs(den) < 1e-9) return false;
+    const Vec3 p = ray.origin + ray.dir * (dot(c.center - ray.origin, c.normal) / den);
+    Vec3 d = p - c.center;
+    d = d - c.normal * dot(d, c.normal);
+    if (length(d) < 1e-300) return false;
+    Vec3 q = c.center + normalize(d) * c.radius;
+    if (!inArc(c, q, 0.0)) {
+        const Vec3 s = c.pointAt(c.startAngle), e = c.pointAt(c.startAngle + c.sweep);
+        q = distance(q, s) < distance(q, e) ? s : e;
+    }
+    *out = q;
+    return true;
+}
+
+// Cruce de las rectas p0 + s*u y q0 + t*v. false si son paralelas o no se tocan.
+bool crossLines(const Vec3& p0, const Vec3& u, const Vec3& q0, const Vec3& v, double tolerance,
+                double* s, double* t) {
+    const double A = dot(u, u), B = dot(u, v), C = dot(v, v);
+    const double den = A * C - B * B;
+    if (A < 1e-300 || C < 1e-300 || den <= 1e-12 * A * C) return false;
+    const Vec3 w = p0 - q0;
+    const double D = dot(u, w), E = dot(v, w);
+    *s = (B * E - C * D) / den;
+    *t = (A * E - B * D) / den;
+    return distance(p0 + u * *s, q0 + v * *t) <= tolerance;
+}
+
+// Cruces del tramo ab con el circulo (o arco) c en su plano. Devuelve cuantos.
+int segmentCircle(const Vec3& a, const Vec3& b, const CircleFeature& c, double tolerance, Vec3 out[2]) {
+    if (std::fabs(dot(a - c.center, c.normal)) > tolerance ||
+        std::fabs(dot(b - c.center, c.normal)) > tolerance) {
+        return 0;
+    }
+    const Vec3 d = b - a;
+    const double A = dot(d, d);
+    if (A < 1e-300) return 0;
+    const double length = std::sqrt(A);
+    const double s0 = dot(c.center - a, d) / A;
+    const double h = distance(a + d * s0, c.center);
+    if (h > c.radius + tolerance) return 0;
+    const double half = std::sqrt(std::max(0.0, c.radius * c.radius - h * h)) / length;
+    const double slack = tolerance / length;
+    const double roots[2] = {s0 - half, s0 + half};
+    int count = 0;
+    for (int k = 0; k < (half * length < tolerance ? 1 : 2); ++k) {
+        const double s = roots[k];
+        if (s < -slack || s > 1 + slack) continue;
+        const Vec3 p = a + d * s;
+        if (inArc(c, p, tolerance)) out[count++] = p;
+    }
+    return count;
+}
+
+// Cruces de dos circulos (o arcos) del mismo plano. Devuelve cuantos.
+int circleCircle(const CircleFeature& c1, const CircleFeature& c2, double tolerance, Vec3 out[2]) {
+    if (length(cross(c1.normal, c2.normal)) > 1e-9 ||
+        std::fabs(dot(c2.center - c1.center, c1.normal)) > tolerance) {
+        return 0;
+    }
+    const Vec3 between = c2.center - c1.center;
+    const double d = length(between);
+    if (d < tolerance || d > c1.radius + c2.radius + tolerance ||
+        d < std::fabs(c1.radius - c2.radius) - tolerance) {
+        return 0;
+    }
+    const Vec3 e = between * (1.0 / d);
+    const double a = (c1.radius * c1.radius - c2.radius * c2.radius + d * d) / (2 * d);
+    const double h = std::sqrt(std::max(0.0, c1.radius * c1.radius - a * a));
+    const Vec3 base = c1.center + e * a;
+    const Vec3 side = normalize(cross(c1.normal, e));
+    const Vec3 points[2] = {base + side * h, base - side * h};
+    int count = 0;
+    for (int k = 0; k < (h < tolerance ? 1 : 2); ++k) {
+        if (inArc(c1, points[k], tolerance) && inArc(c2, points[k], tolerance)) out[count++] = points[k];
+    }
+    return count;
+}
+
 struct PointKey {
     long long x, y, z;
-    bool operator==(const PointKey& o) const { return x == o.x && y == o.y && z == o.z; }
+    int kind;
+    bool operator==(const PointKey& o) const { return x == o.x && y == o.y && z == o.z && kind == o.kind; }
 };
 struct PointKeyHash {
     std::size_t operator()(const PointKey& k) const {
-        return static_cast<std::size_t>(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL);
+        return static_cast<std::size_t>(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL ^
+                                        k.kind * 2654435761LL);
     }
 };
 
@@ -113,13 +236,13 @@ void PickIndex::build(const Mesh& mesh) {
         *hi = box.hi;
     });
 
-    // Puntos notables: extremos y medios de las rectas, centros y extremos de arcos.
+    // Puntos notables: extremos y medios de rectas y arcos, centros y cuadrantes.
     m_snapPoints.clear();
     const double quantum = m_size * 1e-9;
     std::unordered_set<PointKey, PointKeyHash> seen;
     auto add = [&](const Vec3& p, SnapKind kind, int segment, int circle) {
         const PointKey key{std::llround(p.x / quantum), std::llround(p.y / quantum),
-                           std::llround(p.z / quantum)};
+                           std::llround(p.z / quantum), static_cast<int>(kind)};
         if (!seen.insert(key).second) return;
         m_snapPoints.push_back({p, kind, segment, circle});
     };
@@ -138,12 +261,27 @@ void PickIndex::build(const Mesh& mesh) {
     }
     for (std::size_t i = 0; i < mesh.features.circles.size(); ++i) {
         const CircleFeature& c = mesh.features.circles[i];
-        add(c.center, SnapKind::Center, -1, static_cast<int>(i));
+        const int index = static_cast<int>(i);
+        add(c.center, SnapKind::Center, -1, index);
         if (!c.full()) {
-            add(c.pointAt(c.startAngle), SnapKind::Endpoint, -1, static_cast<int>(i));
-            add(c.pointAt(c.startAngle + c.sweep), SnapKind::Endpoint, -1, static_cast<int>(i));
+            add(c.pointAt(c.startAngle), SnapKind::Endpoint, -1, index);
+            add(c.pointAt(c.startAngle + c.sweep), SnapKind::Endpoint, -1, index);
+            add(c.pointAt(c.startAngle + c.sweep * 0.5), SnapKind::Midpoint, -1, index);
+        }
+        Vec3 e1, e2;
+        quadrantAxes(c, &e1, &e2);
+        const Vec3 quadrants[4] = {c.center + e1 * c.radius, c.center + e2 * c.radius,
+                                   c.center - e1 * c.radius, c.center - e2 * c.radius};
+        for (const Vec3& q : quadrants) {
+            if (inArc(c, q, m_size * 1e-9)) add(q, SnapKind::Quadrant, -1, index);
         }
     }
+    m_circles.build(mesh.features.circles.size(), [&](std::size_t i, Vec3* lo, Vec3* hi) {
+        const CircleFeature& c = mesh.features.circles[i];
+        const Vec3 r(c.radius, c.radius, c.radius);
+        *lo = c.center - r;
+        *hi = c.center + r;
+    });
     m_points.build(m_snapPoints.size(), [&](std::size_t i, Vec3* lo, Vec3* hi) {
         *lo = m_snapPoints[i].point;
         *hi = m_snapPoints[i].point;
@@ -170,14 +308,78 @@ bool PickIndex::raycast(const Mesh& mesh, const Ray& ray, double* t, int* triang
     return true;
 }
 
-SnapResult PickIndex::snap(const Mesh& mesh, const Camera& camera, int width, int height,
-                           double sx, double sy, const SnapOptions& options) const {
+unsigned snapModeOf(SnapKind kind) {
+    switch (kind) {
+        case SnapKind::Endpoint: return kSnapEndpoint;
+        case SnapKind::Midpoint: return kSnapMidpoint;
+        case SnapKind::Center: return kSnapCenter;
+        case SnapKind::Quadrant: return kSnapQuadrant;
+        case SnapKind::Intersection: return kSnapIntersection;
+        case SnapKind::Extension: return kSnapExtension;
+        case SnapKind::Perpendicular: return kSnapPerpendicular;
+        case SnapKind::Tangent: return kSnapTangent;
+        case SnapKind::OnEdge: return kSnapNearest;
+        default: return 0;
+    }
+}
+
+const char* snapKindName(SnapKind kind) {
+    switch (kind) {
+        case SnapKind::Endpoint: return "Extremo";
+        case SnapKind::Midpoint: return "Punto medio";
+        case SnapKind::Center: return "Centro";
+        case SnapKind::Quadrant: return "Cuadrante";
+        case SnapKind::Intersection: return "Intersección";
+        case SnapKind::Extension: return "Extensión";
+        case SnapKind::Perpendicular: return "Perpendicular";
+        case SnapKind::Tangent: return "Tangente";
+        case SnapKind::OnEdge: return "Más cercano";
+        default: return "";
+    }
+}
+
+SnapResult PickIndex::surfaceAt(const Mesh& mesh, const Camera& camera, int width, int height,
+                                double sx, double sy, const PlanarInfo* plane) const {
     SnapResult result;
     const Ray ray = pixelRay(camera, width, height, sx, sy);
     double hitT = 0.0;
     int hitTriangle = -1;
-    const bool hit = raycast(mesh, ray, &hitT, &hitTriangle);
-    result.triangle = hit ? hitTriangle : -1;
+    if (raycast(mesh, ray, &hitT, &hitTriangle)) {
+        result.kind = SnapKind::OnFace;
+        result.triangle = hitTriangle;
+        result.point = ray.origin + ray.dir * hitT;
+        return result;
+    }
+    if (plane && plane->planar) {
+        const double denominator = dot(ray.dir, plane->normal);
+        if (std::fabs(denominator) > 1e-12) {
+            const double t = dot(plane->center - ray.origin, plane->normal) / denominator;
+            result.kind = SnapKind::OnPlane;
+            result.point = ray.origin + ray.dir * t;
+        }
+    }
+    return result;
+}
+
+SnapResult PickIndex::snap(const Mesh& mesh, const Camera& camera, int width, int height,
+                           double sx, double sy, const SnapOptions& options) const {
+    const std::vector<SnapResult> all = snapAll(mesh, camera, width, height, sx, sy, options);
+    if (!all.empty()) return all.front();
+    return surfaceAt(mesh, camera, width, height, sx, sy, options.plane);
+}
+
+std::vector<SnapResult> PickIndex::snapAll(const Mesh& mesh, const Camera& camera, int width,
+                                           int height, double sx, double sy,
+                                           const SnapOptions& options) const {
+    std::vector<SnapResult> found;
+    const unsigned modes = options.modes;
+    if (!options.snapping || modes == 0) return found;
+    const Ray ray = pixelRay(camera, width, height, sx, sy);
+    double hitT = 0.0;
+    int hitTriangle = -1;
+    const int triangle = raycast(mesh, ray, &hitT, &hitTriangle) ? hitTriangle : -1;
+    const double R = options.radiusPixels;
+    const double tolerance = m_size * 1e-7;
 
     // Un punto tapado por la pieza no se engancha. Se prueba con el rayo que pasa
     // justo por el punto, no con el del cursor: cerca de una cara vista de canto el
@@ -188,8 +390,8 @@ SnapResult PickIndex::snap(const Mesh& mesh, const Camera& camera, int width, in
         if (!projectPoint(camera, width, height, p, &px, &py)) return false;
         const Ray through = pixelRay(camera, width, height, px, py);
         double t = 0.0;
-        int triangle = -1;
-        if (!raycast(mesh, through, &t, &triangle)) return true;
+        int hidden = -1;
+        if (!raycast(mesh, through, &t, &hidden)) return true;
         return dot(p - through.origin, through.dir) <= t + occlusion;
     };
     auto pixels = [&](const Vec3& p, double* d) {
@@ -198,63 +400,240 @@ SnapResult PickIndex::snap(const Mesh& mesh, const Camera& camera, int width, in
         *d = std::hypot(px - sx, py - sy);
         return true;
     };
-    auto enter = [&](const Vec3& lo, const Vec3& hi) {
-        const Vec3 center = (lo + hi) * 0.5;
-        const double t = std::max(0.0, dot(center - ray.origin, ray.dir)) + length(hi - lo) * 0.5;
-        const double r = options.radiusPixels * worldPerPixel(camera, height, t);
-        return rayHitsBox(ray, lo - Vec3(r, r, r), hi + Vec3(r, r, r));
+    // Cajas que pasan a menos de factor * R pixeles del rayo del cursor.
+    auto near = [&](double factor) {
+        return [&, factor](const Vec3& lo, const Vec3& hi) {
+            const Vec3 center = (lo + hi) * 0.5;
+            const double t = std::max(0.0, dot(center - ray.origin, ray.dir)) + length(hi - lo) * 0.5;
+            const double r = factor * R * worldPerPixel(camera, height, t);
+            return rayHitsBox(ray, lo - Vec3(r, r, r), hi + Vec3(r, r, r));
+        };
     };
+    auto offer = [&](SnapKind kind, const Vec3& p, double d, int segment, int circle) {
+        if (!(modes & snapModeOf(kind))) return false;
+        for (SnapResult& s : found) {
+            if (s.kind == kind && distance(s.point, p) <= tolerance) {
+                s.pixels = std::min(s.pixels, d);
+                return true;
+            }
+        }
+        if (!visible(p)) return false;
+        SnapResult r;
+        r.kind = kind;
+        r.point = p;
+        r.triangle = triangle;
+        r.segment = segment;
+        r.circle = circle;
+        r.pixels = d;
+        found.push_back(r);
+        return true;
+    };
+    auto straight = [&](std::size_t i) { return i >= mesh.edgeCurve.size() || !mesh.edgeCurve[i]; };
 
-    if (options.snapping) {
-        int bestPriority = 99;
-        double bestDistance = 1e300;
-        const SnapPoint* best = nullptr;
-        m_points.query(enter, [&](std::uint32_t i) {
+    // Puntos fijos: extremos, medios, centros y cuadrantes.
+    if (modes & (kSnapEndpoint | kSnapMidpoint | kSnapCenter | kSnapQuadrant)) {
+        m_points.query(near(1.0), [&](std::uint32_t i) {
             const SnapPoint& s = m_snapPoints[i];
             double d;
-            if (!pixels(s.point, &d) || d > options.radiusPixels || !visible(s.point)) return;
-            const int priority = s.kind == SnapKind::Endpoint ? 0 : (s.kind == SnapKind::Center ? 1 : 2);
-            if (priority < bestPriority || (priority == bestPriority && d < bestDistance)) {
-                bestPriority = priority;
-                bestDistance = d;
-                best = &s;
-            }
+            if (!(modes & snapModeOf(s.kind)) || !pixels(s.point, &d) || d > R) return;
+            offer(s.kind, s.point, d, s.segment, s.circle);
         });
-        if (best) {
-            result.kind = best->kind;
-            result.point = best->point;
-            result.segment = best->segment;
-            result.circle = best->circle;
-            return result;
-        }
+    }
 
-        double bestEdge = 1e300;
-        m_segments.query(enter, [&](std::uint32_t i) {
+    // Elementos bajo el cursor, del mas cercano al mas lejano.
+    struct Near {
+        int index;
+        double pixels;
+        Vec3 point;
+    };
+    auto byPixels = [](const Near& a, const Near& b) { return a.pixels < b.pixels; };
+    std::vector<Near> segments, circles;
+    if (modes & (kSnapIntersection | kSnapPerpendicular | kSnapNearest)) {
+        m_segments.query(near(1.0), [&](std::uint32_t i) {
             const Vec3 q = closestOnSegment(mesh.edgeLines[2 * i], mesh.edgeLines[2 * i + 1], ray);
             double d;
-            if (!pixels(q, &d) || d > options.radiusPixels || !visible(q) || d >= bestEdge) return;
-            bestEdge = d;
-            result.kind = SnapKind::OnEdge;
-            result.point = q;
-            result.segment = static_cast<int>(i);
+            if (pixels(q, &d) && d <= R) segments.push_back({static_cast<int>(i), d, q});
         });
-        if (result.kind == SnapKind::OnEdge) return result;
+        std::sort(segments.begin(), segments.end(), byPixels);
     }
+    if (modes & (kSnapIntersection | kSnapPerpendicular | kSnapTangent)) {
+        m_circles.query(near(1.0), [&](std::uint32_t i) {
+            Vec3 q;
+            double d;
+            if (closestOnCircle(mesh.features.circles[i], ray, &q) && pixels(q, &d) && d <= R) {
+                circles.push_back({static_cast<int>(i), d, q});
+            }
+        });
+        std::sort(circles.begin(), circles.end(), byPixels);
+        if (circles.size() > 16) circles.resize(16);
+    }
+    std::vector<Near> lines;
+    for (const Near& n : segments) {
+        if (straight(static_cast<std::size_t>(n.index)) && lines.size() < 32) lines.push_back(n);
+    }
+    auto lineA = [&](const Near& n) { return mesh.edgeLines[2 * n.index]; };
+    auto lineB = [&](const Near& n) { return mesh.edgeLines[2 * n.index + 1]; };
+    auto arcEnds = [&](const CircleFeature& c, const Vec3& p) {
+        return !c.full() && (distance(p, c.pointAt(c.startAngle)) <= tolerance ||
+                             distance(p, c.pointAt(c.startAngle + c.sweep)) <= tolerance);
+    };
+    auto offerCross = [&](const Vec3& p, int segment, int circle) {
+        double d;
+        if (pixels(p, &d) && d <= R) offer(SnapKind::Intersection, p, d, segment, circle);
+    };
 
-    if (hit) {
-        result.kind = SnapKind::OnFace;
-        result.point = ray.origin + ray.dir * hitT;
-        return result;
-    }
-    if (options.plane && options.plane->planar) {
-        const double denominator = dot(ray.dir, options.plane->normal);
-        if (std::fabs(denominator) > 1e-12) {
-            const double t = dot(options.plane->center - ray.origin, options.plane->normal) / denominator;
-            result.kind = SnapKind::OnPlane;
-            result.point = ray.origin + ray.dir * t;
+    if (modes & kSnapIntersection) {
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            const Vec3 a1 = lineA(lines[i]), b1 = lineB(lines[i]);
+            for (std::size_t j = i + 1; j < lines.size(); ++j) {
+                const Vec3 a2 = lineA(lines[j]), b2 = lineB(lines[j]);
+                double s, t;
+                if (!crossLines(a1, b1 - a1, a2, b2 - a2, tolerance, &s, &t)) continue;
+                const double e1 = tolerance / std::max(1e-300, distance(a1, b1));
+                const double e2 = tolerance / std::max(1e-300, distance(a2, b2));
+                if (s < -e1 || s > 1 + e1 || t < -e2 || t > 1 + e2) continue;
+                const bool end1 = s <= e1 || s >= 1 - e1, end2 = t <= e2 || t >= 1 - e2;
+                if (end1 && end2) continue;  // esquina de polilinea: ya es un extremo
+                offerCross(a1 + (b1 - a1) * s, lines[i].index, -1);
+            }
+            for (const Near& c : circles) {
+                const CircleFeature& circle = mesh.features.circles[c.index];
+                Vec3 hits[2];
+                const int count = segmentCircle(a1, b1, circle, tolerance, hits);
+                for (int k = 0; k < count; ++k) {
+                    const bool lineEnd = distance(hits[k], a1) <= tolerance || distance(hits[k], b1) <= tolerance;
+                    if (lineEnd && arcEnds(circle, hits[k])) continue;  // union recta-arco
+                    offerCross(hits[k], lines[i].index, c.index);
+                }
+            }
+        }
+        for (std::size_t i = 0; i < circles.size(); ++i) {
+            const CircleFeature& c1 = mesh.features.circles[circles[i].index];
+            for (std::size_t j = i + 1; j < circles.size(); ++j) {
+                const CircleFeature& c2 = mesh.features.circles[circles[j].index];
+                Vec3 hits[2];
+                const int count = circleCircle(c1, c2, tolerance, hits);
+                for (int k = 0; k < count; ++k) {
+                    if (arcEnds(c1, hits[k]) && arcEnds(c2, hits[k])) continue;  // union arco-arco
+                    offerCross(hits[k], -1, circles[i].index);
+                }
+            }
         }
     }
-    return result;
+
+    if (options.from && (modes & kSnapPerpendicular)) {
+        const Vec3& from = *options.from;
+        for (const Near& n : lines) {
+            const Vec3 a = lineA(n), u = lineB(n) - a;
+            const double A = dot(u, u);
+            if (A < 1e-300) continue;
+            const Vec3 foot = a + u * (dot(from - a, u) / A);
+            if (distance(foot, from) > tolerance) offer(SnapKind::Perpendicular, foot, n.pixels, n.index, -1);
+        }
+        for (const Near& n : circles) {
+            const CircleFeature& c = mesh.features.circles[n.index];
+            Vec3 d = from - c.center;
+            d = d - c.normal * dot(d, c.normal);
+            if (length(d) <= tolerance) continue;
+            const Vec3 dir = normalize(d);
+            const Vec3 feet[2] = {c.center + dir * c.radius, c.center - dir * c.radius};
+            int best = -1;
+            double bestPixels = 1e300;
+            for (int k = 0; k < 2; ++k) {
+                double px;
+                if (inArc(c, feet[k], tolerance) && pixels(feet[k], &px) && px < bestPixels) {
+                    bestPixels = px;
+                    best = k;
+                }
+            }
+            if (best >= 0) offer(SnapKind::Perpendicular, feet[best], n.pixels, -1, n.index);
+        }
+    }
+
+    if (options.from && (modes & kSnapTangent)) {
+        for (const Near& n : circles) {
+            const CircleFeature& c = mesh.features.circles[n.index];
+            const Vec3 fromInPlane = *options.from - c.normal * dot(*options.from - c.center, c.normal);
+            const Vec3 v = fromInPlane - c.center;
+            const double dist = length(v);
+            if (dist <= c.radius + tolerance) continue;
+            const Vec3 e = v * (1.0 / dist), side = cross(c.normal, e);
+            const double cosA = c.radius / dist, sinA = std::sqrt(std::max(0.0, 1 - cosA * cosA));
+            const Vec3 touch[2] = {c.center + (e * cosA + side * sinA) * c.radius,
+                                   c.center + (e * cosA - side * sinA) * c.radius};
+            int best = -1;
+            double bestPixels = 1e300;
+            for (int k = 0; k < 2; ++k) {
+                double px;
+                if (inArc(c, touch[k], tolerance) && pixels(touch[k], &px) && px < bestPixels) {
+                    bestPixels = px;
+                    best = k;
+                }
+            }
+            if (best >= 0) offer(SnapKind::Tangent, touch[best], n.pixels, -1, n.index);
+        }
+    }
+
+    if (modes & kSnapExtension) {
+        // En una esquina redondeada las rectas terminan lejos del vertice: se buscan
+        // hasta 12 radios, pero solo las que, prolongadas, pasan bajo el cursor.
+        std::vector<Near> reach;
+        m_segments.query(near(12.0), [&](std::uint32_t i) {
+            if (!straight(i)) return;
+            double ax, ay, bx, by;
+            if (!projectPoint(camera, width, height, mesh.edgeLines[2 * i], &ax, &ay) ||
+                !projectPoint(camera, width, height, mesh.edgeLines[2 * i + 1], &bx, &by)) {
+                return;
+            }
+            const double lx = bx - ax, ly = by - ay, len = std::hypot(lx, ly);
+            if (len < 1e-9 || std::fabs((sx - ax) * ly - (sy - ay) * lx) / len > R) return;
+            const double s = std::max(0.0, std::min(1.0, ((sx - ax) * lx + (sy - ay) * ly) / (len * len)));
+            const double d = std::hypot(ax + lx * s - sx, ay + ly * s - sy);
+            if (d <= 12.0 * R) reach.push_back({static_cast<int>(i), d, Vec3()});
+        });
+        std::sort(reach.begin(), reach.end(), byPixels);
+        if (reach.size() > 24) reach.resize(24);
+        for (std::size_t i = 0; i < reach.size(); ++i) {
+            const Vec3 a1 = lineA(reach[i]), b1 = lineB(reach[i]);
+            for (std::size_t j = i + 1; j < reach.size(); ++j) {
+                const Vec3 a2 = lineA(reach[j]), b2 = lineB(reach[j]);
+                double s, t;
+                if (!crossLines(a1, b1 - a1, a2, b2 - a2, tolerance, &s, &t)) continue;
+                const double e1 = tolerance / std::max(1e-300, distance(a1, b1));
+                const double e2 = tolerance / std::max(1e-300, distance(a2, b2));
+                const bool inside = s >= -e1 && s <= 1 + e1 && t >= -e2 && t <= 1 + e2;
+                if (inside) continue;  // es un cruce de verdad o un extremo
+                const Vec3 p = a1 + (b1 - a1) * s;
+                double d;
+                if (pixels(p, &d) && d <= R) offer(SnapKind::Extension, p, d, reach[i].index, -1);
+            }
+        }
+    }
+
+    if (modes & kSnapNearest) {
+        for (const Near& n : segments) {
+            if (offer(SnapKind::OnEdge, n.point, n.pixels, n.index, -1)) break;
+        }
+    }
+
+    // "Mas cercano" solo si no hay nada mejor; empate a 1,5 px: gana la prioridad.
+    const bool other = std::any_of(found.begin(), found.end(),
+                                   [](const SnapResult& s) { return s.kind != SnapKind::OnEdge; });
+    if (other) {
+        found.erase(std::remove_if(found.begin(), found.end(),
+                                   [](const SnapResult& s) { return s.kind == SnapKind::OnEdge; }),
+                    found.end());
+    }
+    double best = 1e300;
+    for (const SnapResult& s : found) best = std::min(best, s.pixels);
+    std::stable_sort(found.begin(), found.end(), [&](const SnapResult& a, const SnapResult& b) {
+        const bool farA = a.pixels > best + 1.5, farB = b.pixels > best + 1.5;
+        if (farA != farB) return !farA;
+        const int pa = snapPriority(a.kind), pb = snapPriority(b.kind);
+        if (pa != pb) return pa < pb;
+        return a.pixels < b.pixels;
+    });
+    return found;
 }
 
 // --- Calculos ----------------------------------------------------------------

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <random>
@@ -605,6 +606,13 @@ bool loadStepText(const std::string& text, stp::Mesh* mesh) {
     return stp::loadModel(text.data(), text.size(), ".stp", mesh, &error);
 }
 
+bool loadModelFile(const char* path, stp::Mesh* mesh) {
+    const std::string bytes = readText(path);
+    const char* dot = std::strrchr(path, '.');
+    std::string error;
+    return stp::loadModel(bytes.data(), bytes.size(), dot ? dot : "", mesh, &error);
+}
+
 }  // namespace
 
 TEST(features_step_hole_is_exact) {
@@ -942,13 +950,27 @@ struct PlanScene {
         camera.fitPlanar(plane, static_cast<double>(width) / height);
         pick.build(mesh);
     }
-    stp::SnapResult snapNear(const stp::Vec3& world, double dx, double dy, bool snapping = true) {
+    stp::SnapResult snapNear(const stp::Vec3& world, double dx, double dy, bool snapping = true,
+                             unsigned modes = stp::kSnapDefaultModes, const stp::Vec3* from = nullptr) {
         double sx = 0, sy = 0;
         stp::projectPoint(camera, width, height, world, &sx, &sy);
         stp::SnapOptions options;
         options.snapping = snapping;
+        options.modes = modes;
+        options.from = from;
         options.plane = &plane;
         return pick.snap(mesh, camera, width, height, sx + dx, sy + dy, options);
+    }
+    std::vector<stp::SnapResult> snapAllNear(const stp::Vec3& world, double dx, double dy,
+                                             unsigned modes = stp::kSnapDefaultModes,
+                                             const stp::Vec3* from = nullptr) {
+        double sx = 0, sy = 0;
+        stp::projectPoint(camera, width, height, world, &sx, &sy);
+        stp::SnapOptions options;
+        options.modes = modes;
+        options.from = from;
+        options.plane = &plane;
+        return pick.snapAll(mesh, camera, width, height, sx + dx, sy + dy, options);
     }
 };
 
@@ -959,6 +981,20 @@ PlanScene lineAndCircle() {
     loadDxfText(text, &scene.mesh);
     scene.finish();
     return scene;
+}
+
+PlanScene sceneFrom(const std::string& text) {
+    PlanScene scene;
+    CHECK(loadDxfText(text, &scene.mesh));
+    scene.finish();
+    return scene;
+}
+
+bool hasKind(const std::vector<stp::SnapResult>& all, stp::SnapKind kind) {
+    for (const stp::SnapResult& s : all) {
+        if (s.kind == kind) return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -984,12 +1020,16 @@ TEST(snap_midpoint_and_center) {
 
 TEST(snap_on_circle_edge_has_no_fake_endpoints) {
     PlanScene scene = lineAndCircle();
-    // Un punto del circulo lejos de su centro: solo puede ser "sobre la arista".
-    const stp::SnapResult edge = scene.snapNear(stp::Vec3(60, 40, 0), 0, 2);
+    // Un punto del circulo a 30 grados: solo puede ser "mas cercano".
+    const stp::Vec3 p(50 + 10 * std::cos(stp::kPi / 6), 40 + 10 * std::sin(stp::kPi / 6), 0);
+    const stp::SnapResult edge = scene.snapNear(p, 0, 1, true, stp::kSnapDefaultModes | stp::kSnapNearest);
     CHECK(edge.kind == stp::SnapKind::OnEdge);
     CHECK(edge.segment >= 1);
     CHECK_NEAR(stp::distance(edge.point, stp::Vec3(50, 40, 0)), 10.0, 0.05);
+    // Sin "mas cercano" no se ofrece nada: cae en el plano.
+    CHECK(scene.snapNear(p, 0, 1).kind == stp::SnapKind::OnPlane);
 }
+
 
 TEST(snap_can_be_disabled) {
     PlanScene scene = lineAndCircle();
@@ -997,6 +1037,157 @@ TEST(snap_can_be_disabled) {
     CHECK(free.kind == stp::SnapKind::OnPlane);
     CHECK_NEAR(free.point.x, 100.0, 1e-6);
     CHECK_NEAR(free.point.z, 0.0, 1e-9);
+}
+
+TEST(snap_slot_length_and_width_from_quadrants) {
+    PlanScene scene;
+    CHECK(loadModelFile("tests/samples/plano_brida.dxf", &scene.mesh));
+    scene.finish();
+    const stp::SnapResult bottom = scene.snapNear(stp::Vec3(170, 35, 0), 2, 1);
+    const stp::SnapResult top = scene.snapNear(stp::Vec3(170, 105, 0), -1, 2);
+    CHECK(bottom.kind == stp::SnapKind::Quadrant);
+    CHECK(top.kind == stp::SnapKind::Quadrant);
+    CHECK_NEAR(stp::distance(bottom.point, top.point), 70.0, 1e-9);
+    const stp::SnapResult left = scene.snapNear(stp::Vec3(160, 45, 0), 1, 1);
+    const stp::SnapResult right = scene.snapNear(stp::Vec3(180, 45, 0), -1, 1);
+    CHECK(left.kind == stp::SnapKind::Endpoint);
+    CHECK(right.kind == stp::SnapKind::Endpoint);
+    CHECK_NEAR(stp::distance(left.point, right.point), 20.0, 1e-9);
+}
+
+TEST(snap_tab_order_puts_endpoint_before_quadrant) {
+    PlanScene scene;
+    CHECK(loadModelFile("tests/samples/plano_brida.dxf", &scene.mesh));
+    scene.finish();
+    const std::vector<stp::SnapResult> all = scene.snapAllNear(stp::Vec3(160, 45, 0), 0, 0);
+    CHECK(all.size() >= 2);
+    if (all.size() >= 2) {
+        CHECK(all[0].kind == stp::SnapKind::Endpoint);
+        CHECK(all[1].kind == stp::SnapKind::Quadrant);
+        CHECK_NEAR(stp::distance(all[1].point, stp::Vec3(160, 45, 0)), 0.0, 1e-9);
+    }
+    CHECK(!hasKind(all, stp::SnapKind::Intersection));
+}
+
+TEST(snap_arc_midpoint) {
+    PlanScene scene = sceneFrom(entities({{0, "ARC"}, {10, "0"}, {20, "0"}, {40, "10"}, {50, "0"}, {51, "90"}}));
+    const stp::Vec3 mid(10 * std::cos(stp::kPi / 4), 10 * std::sin(stp::kPi / 4), 0);
+    const stp::SnapResult r = scene.snapNear(mid, 1, -1);
+    CHECK(r.kind == stp::SnapKind::Midpoint);
+    CHECK_NEAR(stp::distance(r.point, mid), 0.0, 1e-9);
+}
+
+TEST(snap_quadrants_respect_negative_sweep) {
+    // Arco de 0 a 90 grados recorrido al reves (normal -Z): sigue cubriendo el
+    // primer cuadrante del dibujo y no ofrece el cuadrante de 180 grados.
+    PlanScene scene = sceneFrom(entities({{0, "ARC"}, {10, "0"}, {20, "0"}, {40, "10"}, {50, "90"},
+                                          {51, "180"}, {210, "0"}, {220, "0"}, {230, "-1"}}));
+    CHECK(scene.mesh.features.circles.size() == 1);
+    // Con normal -Z, x del OCS es -X: el arco va de (0,10) a (10,0) por el primer cuadrante.
+    const std::vector<stp::SnapResult> right = scene.snapAllNear(stp::Vec3(10, 0, 0), 0, 0, stp::kSnapQuadrant);
+    CHECK(hasKind(right, stp::SnapKind::Quadrant));
+    const std::vector<stp::SnapResult> left = scene.snapAllNear(stp::Vec3(-10, 0, 0), 0, 0, stp::kSnapQuadrant);
+    CHECK(left.empty());
+    const stp::SnapResult mid = scene.snapNear(stp::Vec3(7.0710678, 7.0710678, 0), 0, 0, true, stp::kSnapMidpoint);
+    CHECK(mid.kind == stp::SnapKind::Midpoint);
+    CHECK_NEAR(mid.point.x, 7.0710678, 1e-6);
+}
+
+TEST(snap_line_line_and_line_circle_intersections) {
+    PlanScene scene = sceneFrom(entities({{0, "LINE"}, {10, "0"}, {20, "0"}, {11, "100"}, {21, "100"},
+                                          {0, "LINE"}, {10, "0"}, {20, "100"}, {11, "100"}, {21, "0"},
+                                          {0, "CIRCLE"}, {10, "50"}, {20, "140"}, {40, "10"},
+                                          {0, "LINE"}, {10, "0"}, {20, "145"}, {11, "100"}, {21, "145"}}));
+    const stp::SnapResult cross = scene.snapNear(stp::Vec3(50, 50, 0), 2, 1);
+    CHECK(cross.kind == stp::SnapKind::Intersection);
+    CHECK_NEAR(stp::distance(cross.point, stp::Vec3(50, 50, 0)), 0.0, 1e-9);
+    const stp::Vec3 hit(50 + std::sqrt(75.0), 145, 0);
+    const stp::SnapResult lc = scene.snapNear(hit, -1, 1);
+    CHECK(lc.kind == stp::SnapKind::Intersection);
+    CHECK_NEAR(stp::distance(lc.point, hit), 0.0, 1e-9);
+}
+
+TEST(snap_circle_circle_intersection) {
+    PlanScene scene = sceneFrom(entities({{0, "CIRCLE"}, {10, "0"}, {20, "0"}, {40, "10"},
+                                          {0, "CIRCLE"}, {10, "12"}, {20, "0"}, {40, "10"}}));
+    const stp::Vec3 hit(6, 8, 0);
+    const stp::SnapResult r = scene.snapNear(hit, 1, 1);
+    CHECK(r.kind == stp::SnapKind::Intersection);
+    CHECK_NEAR(stp::distance(r.point, hit), 0.0, 1e-9);
+}
+
+TEST(snap_polyline_corner_is_not_intersection) {
+    PlanScene scene = sceneFrom(entities({{0, "LWPOLYLINE"}, {90, "4"}, {70, "1"},
+                                          {10, "0"}, {20, "0"}, {10, "100"}, {20, "0"},
+                                          {10, "100"}, {20, "50"}, {10, "0"}, {20, "50"}}));
+    const std::vector<stp::SnapResult> all = scene.snapAllNear(stp::Vec3(100, 0, 0), 1, 1);
+    CHECK(!all.empty() && all[0].kind == stp::SnapKind::Endpoint);
+    CHECK(!hasKind(all, stp::SnapKind::Intersection));
+}
+
+TEST(snap_tangent_joint_is_not_intersection) {
+    // Recta que sigue en un arco tangente (esquina redondeada): la union es un extremo.
+    const double b = std::tan(stp::kPi / 8);
+    PlanScene scene = sceneFrom(entities({{0, "LWPOLYLINE"}, {90, "3"}, {70, "0"},
+                                          {10, "0"}, {20, "0"}, {10, "90"}, {20, "0"}, {42, std::to_string(b)},
+                                          {10, "100"}, {20, "10"}}));
+    const std::vector<stp::SnapResult> all = scene.snapAllNear(stp::Vec3(90, 0, 0), 0, 0);
+    CHECK(!all.empty() && all[0].kind == stp::SnapKind::Endpoint);
+    CHECK(!hasKind(all, stp::SnapKind::Intersection));
+}
+
+TEST(snap_sampled_arc_pieces_do_not_intersect) {
+    PlanScene scene = sceneFrom(entities({{0, "CIRCLE"}, {10, "0"}, {20, "0"}, {40, "10"}}));
+    const stp::Vec3 p(10 * std::cos(0.5), 10 * std::sin(0.5), 0);
+    CHECK(scene.snapAllNear(p, 0, 0, stp::kSnapIntersection).empty());
+}
+
+TEST(snap_extension_finds_rounded_corner_vertex) {
+    const double b = std::tan(stp::kPi / 8);
+    PlanScene scene = sceneFrom(entities({{0, "LWPOLYLINE"}, {90, "4"}, {70, "0"},
+                                          {10, "0"}, {20, "0"}, {10, "90"}, {20, "0"}, {42, std::to_string(b)},
+                                          {10, "100"}, {20, "10"}, {10, "100"}, {20, "50"}}));
+    const stp::SnapResult off = scene.snapNear(stp::Vec3(100, 0, 0), 1, 1);
+    CHECK(off.kind == stp::SnapKind::OnPlane);  // Extension esta apagada por defecto
+    const stp::SnapResult r = scene.snapNear(stp::Vec3(100, 0, 0), 1, 1, true,
+                                             stp::kSnapDefaultModes | stp::kSnapExtension);
+    CHECK(r.kind == stp::SnapKind::Extension);
+    CHECK_NEAR(stp::distance(r.point, stp::Vec3(100, 0, 0)), 0.0, 1e-9);
+}
+
+TEST(snap_perpendicular_to_line_and_circle) {
+    PlanScene scene = sceneFrom(entities({{0, "LINE"}, {10, "30"}, {20, "-50"}, {11, "30"}, {21, "50"},
+                                          {0, "CIRCLE"}, {10, "80"}, {20, "0"}, {40, "10"}}));
+    const stp::Vec3 from(10, 0, 0);
+    const stp::SnapResult none = scene.snapNear(stp::Vec3(30, 20, 0), 0, 0, true, stp::kSnapPerpendicular);
+    CHECK(none.kind == stp::SnapKind::OnPlane);  // sin primer punto no hay perpendicular
+    const stp::SnapResult line = scene.snapNear(stp::Vec3(30, 20, 0), 1, 0, true, stp::kSnapPerpendicular, &from);
+    CHECK(line.kind == stp::SnapKind::Perpendicular);
+    CHECK_NEAR(stp::distance(line.point, stp::Vec3(30, 0, 0)), 0.0, 1e-9);
+    const stp::Vec3 onCircle(80 - 10 * std::cos(0.6), 10 * std::sin(0.6), 0);
+    const stp::SnapResult circle = scene.snapNear(onCircle, 0, 0, true, stp::kSnapPerpendicular, &from);
+    CHECK(circle.kind == stp::SnapKind::Perpendicular);
+    CHECK_NEAR(stp::distance(circle.point, stp::Vec3(70, 0, 0)), 0.0, 1e-9);
+}
+
+TEST(snap_tangent_from_first_point) {
+    PlanScene scene = sceneFrom(entities({{0, "CIRCLE"}, {10, "0"}, {20, "0"}, {40, "5"},
+                                          {0, "POINT"}, {10, "10"}, {20, "0"}}));
+    const stp::Vec3 from(10, 0, 0);
+    const stp::Vec3 tangent(2.5, 5 * std::sin(stp::kPi / 3), 0);
+    const stp::SnapResult r = scene.snapNear(tangent, 1, 1, true, stp::kSnapTangent, &from);
+    CHECK(r.kind == stp::SnapKind::Tangent);
+    CHECK_NEAR(r.point.x, 2.5, 1e-9);
+    CHECK_NEAR(r.point.y, 4.330127019, 1e-6);
+}
+
+TEST(snap_disabled_modes_are_not_offered) {
+    PlanScene scene = lineAndCircle();
+    CHECK(scene.snapAllNear(stp::Vec3(100, 0, 0), 0, 0, stp::kSnapMidpoint).empty());
+    CHECK(scene.snapAllNear(stp::Vec3(50, 40, 0), 0, 0, stp::kSnapEndpoint).empty());
+    CHECK(scene.snapNear(stp::Vec3(100, 0, 0), 0, 0, true, 0).kind == stp::SnapKind::OnPlane);
+    CHECK(std::string(stp::snapKindName(stp::SnapKind::Quadrant)) == "Cuadrante");
+    CHECK(stp::snapModeOf(stp::SnapKind::OnEdge) == stp::kSnapNearest);
 }
 
 TEST(raycast_matches_brute_force) {
@@ -1072,8 +1263,10 @@ TEST(snap_visible_silhouette_corner_from_any_side) {
     CHECK(misses == 0);
 }
 
-TEST(snap_is_fast_on_huge_drawing) {
-    // 20 000 circulos de 72 tramos y 20 000 rectangulos: 1,52 millones de segmentos.
+namespace {
+
+// 20 000 circulos de 72 tramos y 20 000 rectangulos: 1,52 millones de segmentos.
+PlanScene hugeScene(bool finish = true) {
     PlanScene scene;
     std::mt19937 random(7);
     std::uniform_real_distribution<double> x(0, 5000), y(0, 3000), r(2, 30);
@@ -1092,6 +1285,15 @@ TEST(snap_is_fast_on_huge_drawing) {
         const stp::Vec3 o(x(random), y(random), 0);
         addRectangle(&scene.mesh, o, stp::Vec3(40, 0, 0), stp::Vec3(0, 25, 0));
     }
+    if (finish) scene.finish();
+    return scene;
+}
+
+}  // namespace
+
+TEST(snap_is_fast_on_huge_drawing) {
+    PlanScene scene = hugeScene(false);
+    std::mt19937 random(7);
     const auto t0 = std::chrono::steady_clock::now();
     scene.finish();
     const auto t1 = std::chrono::steady_clock::now();
@@ -1108,6 +1310,31 @@ TEST(snap_is_fast_on_huge_drawing) {
     std::printf("    indice %.0f ms, consulta %.3f ms\n", buildMs, queryMs);
     CHECK(queryMs < 5.0);
     CHECK(buildMs < 3000.0);
+}
+
+TEST(snap_all_modes_is_fast_on_huge_drawing) {
+    PlanScene scene = hugeScene();
+    std::mt19937 random(11);
+    std::uniform_real_distribution<double> px(0, scene.width), py(0, scene.height);
+    const stp::Vec3 from(2500, 1500, 0);
+    stp::SnapOptions options;
+    options.plane = &scene.plane;
+    options.modes = stp::kSnapAllModes;
+    options.from = &from;
+    const int queries = 300;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < queries; ++i) {
+        scene.pick.snap(scene.mesh, scene.camera, scene.width, scene.height, px(random), py(random), options);
+    }
+    // Tambien con zoom: 20 veces mas cerca hay menos elementos pero mas grandes.
+    scene.camera.orthoHeight /= 20;
+    for (int i = 0; i < queries; ++i) {
+        scene.pick.snap(scene.mesh, scene.camera, scene.width, scene.height, px(random), py(random), options);
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    const double queryMs = std::chrono::duration<double, std::milli>(t1 - t0).count() / (2 * queries);
+    std::printf("    todos los modos: consulta %.3f ms\n", queryMs);
+    CHECK(queryMs < 5.0);
 }
 
 // --- Calculos de medida ---------------------------------------------------------------
