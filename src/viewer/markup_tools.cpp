@@ -316,6 +316,12 @@ void MarkupTools::cycleColor() {
     m_host->markupChanged();
 }
 
+void MarkupTools::setColor(std::uint32_t argb) {
+    if (m_tool == Tool::Highlight) m_highlight = argb;
+    else m_color = argb;
+    m_host->markupChanged();
+}
+
 int MarkupTools::hiddenCount(const Camera& camera) const {
     int count = 0;
     for (const Mark& mark : m_doc.marks) {
@@ -1280,8 +1286,9 @@ void MarkupTools::draw(HDC dc, const Camera& camera, int width, int height, doub
             g.DrawLine(&rubber, a, b);
             if (m_tool == Tool::Distance) {
                 const DistanceResult d = measureDistance(m_pending.back().point, m_hover.point, m_host->markupPlane());
-                drawLabel(&g, (a.X + b.X) / 2, (a.Y + b.Y) / 2,
-                          widen(formatLength(d.total, m_host->markupMesh().units)), L"", kMeasureColor, scale);
+                std::wstring text = widen(formatLength(d.total, m_host->markupMesh().units));
+                if (m_constrained.applied && m_constrained.axisName) text = widen(m_constrained.axisName) + L": " + text;
+                drawLabel(&g, (a.X + b.X) / 2, (a.Y + b.Y) / 2, text, L"", kMeasureColor, scale);
             }
         }
     }

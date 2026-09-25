@@ -49,7 +49,7 @@ const CommandInfo kCommands[] = {
     {kCmdSnapMode + 8, Icon::SnapNearest, L"Más cercano", nullptr, L"Cualquier punto de una arista."},
     {kCmdOrtho, Icon::Ortho, L"Orto", L"F8", L"Fija la medida a horizontal o vertical (X, Y o Z en 3D)."},
     {kCmdPolar, Icon::Polar, L"Polar", L"F10", L"Fija la dirección a múltiplos del ángulo elegido."},
-    {kCmdPolarMenu, Icon::ChevronDown, L"Ángulo polar", nullptr, L"Paso del ajuste polar."},
+    {kCmdPolarMenu, Icon::None, L"Ángulo polar", nullptr, L"Paso del ajuste polar."},
     {kCmdPolarStep + 15, Icon::Polar, L"15°", nullptr, L"Paso polar de 15 grados."},
     {kCmdPolarStep + 30, Icon::Polar, L"30°", nullptr, L"Paso polar de 30 grados."},
     {kCmdPolarStep + 45, Icon::Polar, L"45°", nullptr, L"Paso polar de 45 grados."},

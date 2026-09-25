@@ -242,6 +242,55 @@ void SceneView::updateStyle() {
 
 void SceneView::invalidate() {
     if (m_hwnd) InvalidateRect(m_hwnd, nullptr, FALSE);
+    if (m_statusListener) m_statusListener();
+}
+
+void SceneView::standardView(int index) {
+    static const double views[7][2] = {{-1.5707963, 0.0}, {1.5707963, 0.0}, {3.1415927, 0.0}, {0.0, 0.0},
+                                       {-1.5707963, 1.5533430}, {-1.5707963, -1.5533430}, {-0.7853982, 0.5235988}};
+    if (index < 0 || index > 6 || m_mesh.empty()) return;
+    setStandardView(views[index][0], views[index][1]);
+}
+
+void SceneView::togglePlan2d() {
+    if (m_plan2d) setStandardView(-0.7853982, 0.5235988);
+    else enterPlanView();
+}
+
+void SceneView::setShaded(bool on) {
+    m_style.drawFaces = on;
+    // Sin caras las aristas oscuras se pierden contra el fondo.
+    if (!on) m_style.drawEdges = true;
+    updateStyle();
+    invalidate();
+}
+
+void SceneView::setEdges(bool on) {
+    m_style.drawEdges = on;
+    m_frameValid = false;
+    invalidate();
+}
+
+void SceneView::setPerspective(bool on) {
+    if (m_plan2d || on == !m_camera.ortho) return;  // un plano solo tiene sentido en ortografica
+    m_camera.ortho = !on;
+    fitView();
+}
+
+int SceneView::zoomPercent() const {
+    if (m_mesh.empty() || m_fitSize <= 0) return 0;
+    const double now = (m_camera.ortho || m_camera.planView) ? m_camera.orthoHeight : m_camera.distance;
+    return now > 0 ? static_cast<int>(std::lround(100.0 * m_fitSize / now)) : 0;
+}
+
+std::wstring SceneView::statusText() const {
+    if (m_tools) {
+        const std::wstring text = m_tools->statusText();
+        if (!text.empty()) return text;
+    }
+    if (m_mesh.empty()) return std::wstring();
+    if (m_plan2d) return L"Arrastrar: mover  \u00b7  Rueda: zoom al cursor  \u00b7  Doble clic: encuadrar";
+    return L"Arrastrar: girar  \u00b7  Bot\u00f3n derecho o medio: mover  \u00b7  Rueda: zoom  \u00b7  Doble clic: encuadrar";
 }
 
 void SceneView::loadFile(const std::wstring& path) {
@@ -383,6 +432,7 @@ void SceneView::fitView() {
         m_camera.planView = false;
         m_camera.fit(m_mesh.bounds, aspect);
     }
+    m_fitSize = (m_camera.ortho || m_camera.planView) ? m_camera.orthoHeight : m_camera.distance;
     m_frameValid = false;
     invalidate();
 }
@@ -526,6 +576,10 @@ void SceneView::drawOverlay(HDC dc) {
                                               : L"   (vista previa guardada por el CAD)";
         DrawTextW(dc, (m_title + note).c_str(), -1, &box,
                   DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    } else if (m_chrome) {
+        // Visor con cinta: titulo, medidas y ayuda van a la barra de titulo, al panel y a
+        // la barra de estado. Sobre la vista quedan solo los ejes.
+        if (!m_mesh.empty() && !m_plan2d) drawTriad(dc);
     } else if (!m_mesh.empty()) {
         const Vec3 size = m_mesh.bounds.size();
         wchar_t line[512];
@@ -923,24 +977,10 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
                 case '0':
                 case '7': setStandardView(-0.7853982, 0.5235988); break;
                 case 'D': enterPlanView(); break;
-                case 'W':
-                    m_style.drawFaces = !m_style.drawFaces;
-                    // Sin caras las aristas oscuras se pierden contra el fondo.
-                    m_style.drawEdges = true;
-                    updateStyle();
-                    invalidate();
-                    break;
+                case 'W': setShaded(!m_style.drawFaces); break;
                 case 'A':
-                case 'E':
-                    m_style.drawEdges = !m_style.drawEdges;
-                    m_frameValid = false;
-                    invalidate();
-                    break;
-                case 'P':
-                    if (m_plan2d) break;  // un plano solo tiene sentido en ortografica
-                    m_camera.ortho = !m_camera.ortho;
-                    fitView();
-                    break;
+                case 'E': setEdges(!m_style.drawEdges); break;
+                case 'P': setPerspective(m_camera.ortho); break;
                 default:
                     break;
             }

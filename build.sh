@@ -13,7 +13,7 @@ STRIP=${STRIP:-x86_64-w64-mingw32-strip}
 
 ENGINE="src/export/pdf_writer.cpp src/engine/features.cpp src/engine/markup.cpp src/engine/measure.cpp src/engine/planar.cpp src/engine/step_file.cpp src/engine/step_model.cpp src/engine/surfaces.cpp src/engine/tessellate.cpp src/render/renderer.cpp src/formats/model_loader.cpp src/formats/mesh_formats.cpp src/formats/dxf.cpp src/formats/iges.cpp src/formats/embedded_preview.cpp src/ui/ribbon_layout.cpp src/ui/view_cube_math.cpp src/ui/recent_files.cpp"
 FLAGS="-std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-delete-non-virtual-dtor"
-VIEWER_UI="src/viewer/ui/theme.cpp src/viewer/ui/icons.cpp src/viewer/ui/commands.cpp"
+VIEWER_UI="src/viewer/ui/theme.cpp src/viewer/ui/icons.cpp src/viewer/ui/commands.cpp src/viewer/ui/tooltip.cpp src/viewer/ui/popup_menu.cpp src/viewer/ui/ribbon.cpp src/viewer/ui/status_bar.cpp"
 STATIC="-static -static-libgcc -static-libstdc++"
 FLAGS="$FLAGS -pthread"
 
@@ -42,7 +42,7 @@ $CXX_WIN $FLAGS -shared -o dist/StepShellExt.dll \
 # Visor 3D.
 $WINDRES src/viewer/viewer.rc -O coff -o build/viewer.res
 $CXX_WIN $FLAGS -municode -o dist/stpviewer.exe \
-    src/viewer/main.cpp src/viewer/toolbar.cpp src/viewer/export.cpp src/viewer/scene_view.cpp src/viewer/image_view.cpp src/viewer/text_overlay.cpp src/viewer/markup_tools.cpp $VIEWER_UI $ENGINE build/viewer.res \
+    src/viewer/main.cpp src/viewer/export.cpp src/viewer/scene_view.cpp src/viewer/image_view.cpp src/viewer/text_overlay.cpp src/viewer/markup_tools.cpp $VIEWER_UI $ENGINE build/viewer.res \
     -mwindows $STATIC -lcomctl32 -lshlwapi -lole32 -loleaut32 -luuid -lgdi32 -luser32 \
     -lshell32 -lcomdlg32 -ladvapi32 -lgdiplus
 

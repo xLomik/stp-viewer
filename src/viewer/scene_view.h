@@ -59,6 +59,37 @@ public:
     bool toolActive() const { return m_tools && m_tools->active(); }
     void setMarkupListener(std::function<void()> listener) { m_markupListener = std::move(listener); }
 
+    // Comandos de vista (cinta, cubo de vistas).
+    void fit() { fitView(); }
+    // 0 frente, 1 atras, 2 izquierda, 3 derecha, 4 superior, 5 inferior, 6 isometrica.
+    void standardView(int index);
+    void togglePlan2d();
+    bool plan2d() const { return m_plan2d; }
+    bool canPlan2d() const { return m_planar.planar && !m_mesh.empty(); }
+    bool shaded() const { return m_style.drawFaces; }
+    void setShaded(bool on);
+    bool edges() const { return m_style.drawEdges; }
+    void setEdges(bool on);
+    bool perspective() const { return !m_camera.ortho; }
+    void setPerspective(bool on);
+    // Visor con cinta y barra de estado: sin textos de ayuda sobre la vista.
+    void setChrome(bool chrome) {
+        m_chrome = chrome;
+        invalidate();
+    }
+    int zoomPercent() const;  // 100 = encuadre completo
+    const Mesh& mesh() const { return m_mesh; }
+    const LoadStats& stats() const { return m_stats; }
+    const PlanarInfo& planar() const { return m_planar; }
+    bool loading() const { return m_loading; }
+    bool truncated() const { return m_truncated; }
+    // Aviso de carga o error ("Cargando...", "No se pudo leer el archivo").
+    const std::wstring& message() const { return m_message; }
+    // Ayuda o mensaje de la herramienta; sin herramienta, la ayuda de navegacion.
+    std::wstring statusText() const;
+    // Cursor, zoom, carga o mensajes cambiaron: la barra de estado se actualiza.
+    void setStatusListener(std::function<void()> listener) { m_statusListener = std::move(listener); }
+
     // MarkupHost
     HWND markupWindow() const override { return m_hwnd; }
     const Mesh& markupMesh() const override { return m_mesh; }
@@ -142,6 +173,9 @@ private:
     std::unique_ptr<MarkupTools> m_tools;
     std::shared_ptr<PickIndex> m_pick;
     std::function<void()> m_markupListener;
+    std::function<void()> m_statusListener;
+    bool m_chrome = false;
+    double m_fitSize = 0.0;  // orthoHeight o distancia del ultimo encuadre
     bool m_toolsEnabled = false;
 
     bool m_trackingMouse = false;

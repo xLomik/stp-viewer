@@ -90,6 +90,10 @@ public:
     void redo();
     void deleteSelected();
     void cycleColor();
+    // Color de la proxima marca (resaltador: su propia paleta).
+    void setColor(std::uint32_t argb);
+    bool canUndo() const { return !m_undo.empty(); }
+    bool canRedo() const { return !m_redo.empty(); }
     std::uint32_t color() const { return m_tool == Tool::Highlight ? m_highlight : m_color; }
     int hiddenCount(const Camera& camera) const;  // marcas de otras vistas
     int selected() const { return m_selected; }

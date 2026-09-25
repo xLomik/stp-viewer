@@ -2,6 +2,9 @@
 // menus, la barra de estado y los tooltips salen de esta tabla.
 #pragma once
 
+#include <cstdint>
+#include <string>
+
 #include "icons.h"
 
 namespace stp {
@@ -38,6 +41,8 @@ const CommandInfo* commandInfo(int id);  // nullptr si no existe
 struct CommandState {
     bool enabled = true;
     bool checked = false;
+    std::wstring label;          // texto que reemplaza al de la tabla ("Paso 45\u00b0")
+    std::uint32_t swatch = 0;    // != 0: el boton muestra este color (ARGB)
 };
 
 }  // namespace ui
