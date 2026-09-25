@@ -11,6 +11,8 @@
 
 #include "image_view.h"
 #include "text_overlay.h"
+#include "ui/commands.h"
+#include "ui/theme.h"
 
 namespace stp {
 namespace {
@@ -165,6 +167,7 @@ bool SceneView::create(HINSTANCE instance, HWND parent, const RECT& rect) {
     }
     m_camera.ortho = true;
     updateStyle();
+    m_barTip.create(instance, m_hwnd);
     return true;
 }
 
@@ -289,6 +292,104 @@ void SceneView::animateTo(double yaw, double pitch, bool fit) {
     m_animating = true;
     m_animFit = fit;
     SetTimer(m_hwnd, kCubeTimer, 15, nullptr);
+}
+
+std::vector<SceneView::BarButton> SceneView::miniBarLayout() const {
+    std::vector<BarButton> buttons;
+    const int size = scaled(28), gap = scaled(10), pad = scaled(4);
+    const int width = 7 * size + gap + 2 * pad;
+    const RECT cube = cubeBounds();
+    const int cubeLeft = m_cubeVisible ? static_cast<int>(cube.left) - scaled(6) : m_width;
+    int x = std::max(scaled(8), std::min((m_width - width) / 2, cubeLeft - width));
+    const int y = scaled(30);
+    x += pad;
+    for (int id = 0; id < 7; ++id) {
+        if (id == 5) x += gap;
+        buttons.push_back({RECT{x, y + pad, x + size, y + pad + size}, id});
+        x += size;
+    }
+    return buttons;
+}
+
+void SceneView::drawMiniBar(HDC dc) {
+    const std::vector<BarButton> buttons = miniBarLayout();
+    if (buttons.empty() || !ensureGdiplus()) return;
+    const bool light = m_hostColors && isLight(m_hostBackground);
+    Gdiplus::Graphics g(dc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+    const float pad = static_cast<float>(scaled(4));
+    const RECT& first = buttons.front().rect;
+    const RECT& last = buttons.back().rect;
+    const Gdiplus::RectF pill(first.left - pad, first.top - pad, last.right - first.left + 2 * pad,
+                              static_cast<float>(last.bottom - first.top) + 2 * pad);
+    ui::fillRound(g, pill, pill.Height / 2, light ? 0xE6FFFFFF : 0xD9262B32);
+    ui::strokeRound(g, pill, pill.Height / 2, light ? 0x40000000 : ui::kBorder, 1.0f);
+    const float sepX = static_cast<float>(buttons[5].rect.left) - scaled(5);
+    Gdiplus::Pen sep(ui::color(light ? 0xFFB0B8C0 : ui::kBorder), 1.0f);
+    g.DrawLine(&sep, sepX, pill.Y + scaled(7), sepX, pill.Y + pill.Height - scaled(7));
+    static const ui::Icon icons[7] = {ui::Icon::Navigate, ui::Icon::Distance, ui::Icon::Radius, ui::Icon::Angle,
+                                      ui::Icon::Area, ui::Icon::Snap, ui::Icon::Ortho};
+    const Tool tools[5] = {Tool::Navigate, Tool::Distance, Tool::Radius, Tool::Angle, Tool::Area};
+    for (const BarButton& b : buttons) {
+        const Gdiplus::RectF box(static_cast<float>(b.rect.left), static_cast<float>(b.rect.top),
+                                 static_cast<float>(b.rect.right - b.rect.left), static_cast<float>(b.rect.bottom - b.rect.top));
+        const bool on = b.id < 5 ? m_tools->tool() == tools[b.id]
+                        : b.id == 5 ? m_tools->snapSettings().enabled
+                                    : m_tools->snapSettings().constraint.kind == ConstraintKind::Ortho;
+        if (on) ui::fillRound(g, box, box.Height / 2, ui::kAccent);
+        else if (b.id == m_barHot) ui::fillRound(g, box, box.Height / 2, light ? 0x22000000 : ui::kHover);
+        const float icon = static_cast<float>(scaled(16));
+        ui::drawIcon(g, icons[b.id], Gdiplus::RectF(box.X + (box.Width - icon) / 2, box.Y + (box.Height - icon) / 2, icon, icon),
+                     on ? 0xFFFFFFFF : (light ? 0xFF2A3440 : ui::kText));
+    }
+}
+
+// Raton sobre la mini barra del panel. true si el mensaje es suyo.
+bool SceneView::miniBarMessage(UINT msg, LPARAM lparam) {
+    if (!miniBarVisible()) return false;
+    if (msg == WM_MOUSELEAVE) {
+        if (m_barHot >= 0) {
+            m_barHot = -1;
+            m_barTip.hide();
+            invalidate();
+        }
+        return false;
+    }
+    if (msg != WM_MOUSEMOVE && msg != WM_LBUTTONDOWN && msg != WM_LBUTTONUP && msg != WM_LBUTTONDBLCLK) return false;
+    if (m_orbiting || m_panning) return false;
+    const POINT p = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    int hot = -1;
+    for (const BarButton& b : miniBarLayout()) {
+        if (PtInRect(&b.rect, p)) hot = b.id;
+    }
+    if (hot != m_barHot) {
+        m_barHot = hot;
+        m_barTip.hide();
+        if (hot >= 0) {
+            static const int commands[7] = {ui::kCmdNavigate, ui::kCmdTool + 1, ui::kCmdTool + 2, ui::kCmdTool + 3,
+                                            ui::kCmdTool + 4, ui::kCmdSnapToggle, ui::kCmdOrtho};
+            if (!m_barTip.visible() && IsWindow(m_hwnd)) {
+                if (const ui::CommandInfo* info = ui::commandInfo(commands[hot])) {
+                    const RECT r = miniBarLayout()[static_cast<std::size_t>(hot)].rect;
+                    POINT anchor = {r.left, r.bottom + scaled(8)};
+                    ClientToScreen(m_hwnd, &anchor);
+                    m_barTip.show(*info, anchor, m_dpi);
+                }
+            }
+        }
+        invalidate();
+    }
+    if (hot < 0) return false;
+    if (msg == WM_LBUTTONDOWN) {
+        SetFocus(m_hwnd);
+        const Tool tools[5] = {Tool::Navigate, Tool::Distance, Tool::Radius, Tool::Angle, Tool::Area};
+        if (hot < 5) m_tools->setTool(m_tools->tool() == tools[hot] && hot > 0 ? Tool::Navigate : tools[hot]);
+        else if (hot == 5) m_tools->toggleSnap();
+        else m_tools->toggleOrtho();
+        invalidate();
+    }
+    return true;
 }
 
 // Raton sobre el cubo de vistas: hover, clic en cara/arista/esquina e Inicio. Devuelve
@@ -475,7 +576,8 @@ void SceneView::fitView() {
     const double aspect = m_height > 0 ? static_cast<double>(m_width) / m_height : 1.0;
     if (m_plan2d) {
         // Deja libres las franjas de arriba y abajo, donde van la etiqueta y la ayuda.
-        const double reserve = scaled(m_compact ? 22 : 30);
+        // En el panel la mini barra flotante ocupa la franja de arriba.
+        const double reserve = scaled(miniBarVisible() ? 64 : (m_compact ? 22 : 30));
         const double usable = m_height > 0 ? std::max(0.5, (m_height - 2.0 * reserve) / m_height) : 1.0;
         m_camera.fitPlanar(m_planar, aspect, 1.04 / usable);
     } else {
@@ -784,6 +886,7 @@ void SceneView::drawScene(HDC dc) {
         g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
         m_cube.draw(g, m_camera, m_plan2d, cubeBounds(), m_dpi, m_hostColors && isLight(m_hostBackground));
     }
+    if (miniBarVisible()) drawMiniBar(dc);
 }
 
 void SceneView::loadMarks() {
@@ -912,6 +1015,7 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
     } else if (msg == WM_MOUSELEAVE) {
         m_trackingMouse = false;
     }
+    if (miniBarMessage(msg, lparam)) return msg == WM_SETCURSOR ? TRUE : 0;
     const bool onCube = cubeMessage(msg, lparam);
     if (onCube && msg == WM_LBUTTONUP) {
         ReleaseCapture();

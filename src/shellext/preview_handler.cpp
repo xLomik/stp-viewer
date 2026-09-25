@@ -8,6 +8,7 @@
 #include <string>
 
 #include "../viewer/scene_view.h"
+#include "../viewer/settings.h"
 #include "shellext.h"
 
 namespace {
@@ -122,6 +123,8 @@ public:
 
         m_view.setCompact(true);
         m_view.enableTools(false);
+        // Los modos de enganche del visor, solo de lectura: el panel nunca escribe.
+        if (m_view.tools()) m_view.tools()->setSnapSettings(stp::loadSnapSettings());
         // prevhost.exe es un proceso aparte, pero el panel no puede quedarse
         // cargando para siempre con un archivo enorme.
         m_view.setBudget(20000);

@@ -12,6 +12,7 @@
 #include "../formats/formats.h"
 #include "../render/renderer.h"
 #include "markup_tools.h"
+#include "ui/tooltip.h"
 #include "ui/view_cube.h"
 
 namespace stp {
@@ -204,6 +205,18 @@ private:
     ULONGLONG m_animStart = 0;
     bool m_animating = false;
     bool m_animFit = false;
+
+    // Mini barra flotante del panel del Explorador (sin cinta): medir, OSNAP y ORTO.
+    struct BarButton {
+        RECT rect;
+        int id;  // 0..4 herramienta de medir (Navegar, Distancia, Radio, Angulo, Area); 5 OSNAP; 6 ORTO
+    };
+    bool miniBarVisible() const { return m_tools && !m_tools->editing() && !m_mesh.empty() && !m_image; }
+    std::vector<BarButton> miniBarLayout() const;
+    void drawMiniBar(HDC dc);
+    bool miniBarMessage(UINT msg, LPARAM lparam);
+    int m_barHot = -1;
+    ui::Tooltip m_barTip;
     bool m_orbiting = false;
     bool m_panning = false;
     POINT m_lastMouse = {};
