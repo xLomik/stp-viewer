@@ -7,7 +7,7 @@ interactivo** y un visor 3D independiente.
 | Programa | Que hace |
 |---|---|
 | `StepShellExt.dll` | Dos extensiones de shell en una DLL: `IThumbnailProvider` dibuja la miniatura de cada archivo en la carpeta, e `IPreviewHandler` pone la pieza en el panel de vista previa, donde se puede girar, acercar y mover sin abrir nada. |
-| `stpviewer.exe` | Visor 3D independiente, con la misma vista 3D que usa el panel. |
+| `stpviewer.exe` | Visor independiente con cinta, cubo de vistas, panel de marcas y enganche a objetos (OSNAP) para medir; usa la misma vista 3D que el panel. |
 
 ## Formatos
 
@@ -57,40 +57,103 @@ No dependen de ningun kernel CAD externo: el lector de STEP, el mallador y el
 render estan escritos en el repositorio y se compilan a binarios estaticos de
 ~1 MB que no necesitan .NET ni Visual C++ Redistributable.
 
+## Interfaz del visor
+
+El visor tiene la forma de un programa CAD de escritorio, en gris grafito:
+
+- **Barra de título propia** con el nombre del archivo (`*` si hay marcas sin
+  guardar) y los botones de minimizar, maximizar y cerrar. Se arrastra, se
+  acopla a los bordes de la pantalla y abre el menú de la ventana con clic
+  derecho, como cualquier ventana de Windows.
+- **Cinta con pestañas** — *Archivo* (abrir, recientes, guardar marcas,
+  exportar PDF y PNG), *Inicio* (navegar, encuadrar, vistas estándar, plano 2D),
+  *Medir* (herramientas, enganche y restricciones), *Marcar* (resaltador,
+  subrayado, nota, formas, lápiz, color, deshacer) y *Vista* (sombreado,
+  alambre, aristas, perspectiva, panel, barra de estado, cubo). Cada botón tiene
+  un tooltip con su atajo. Doble clic en una pestaña pliega la cinta; en una
+  ventana angosta los grupos pasan a iconos pequeños y luego a un botón con menú.
+- **Cubo de vistas** arriba a la derecha: clic en una cara, arista o esquina
+  gira la pieza (animado) y la casita vuelve a la isométrica encuadrada. En los
+  planos 2D es una brújula que señala el norte del dibujo.
+- **Panel lateral** (`F2`): arriba las marcas agrupadas por vista (clic para
+  ir a ellas), abajo las propiedades de la marca elegida —valor, color, texto de
+  la nota, que se edita ahí mismo— o, sin selección, las del modelo (formato,
+  unidades, tamaño, caras, triángulos). El borde izquierdo y el divisor se
+  arrastran.
+- **Barra de estado**: coordenadas del cursor con unidades, los interruptores
+  **OSNAP**, **ORTO** y **POLAR** (clic los alterna, clic derecho abre sus
+  opciones), 2D/3D, unidades, zoom y la ayuda de la herramienta activa.
+- **Pantalla de inicio** sin archivo abierto: abrir, archivos recientes (los
+  que ya no existen se ven en gris y se pueden quitar) y soltar un archivo.
+- Todo se dibuja con vectores y escala con el DPI de cada monitor. La
+  configuración (modos de enganche, pestaña, panel, tamaño de la ventana,
+  recientes) se guarda en `HKCU\Software\stp-viewer`.
+
 ## Medir y marcar
 
-En el visor hay una barra de herramientas a la izquierda. Con ella se puede
+Las pestañas **Medir** y **Marcar** de la cinta (o sus atajos) sirven para
 **medir** y **marcar** una pieza o un plano, guardar las marcas junto al archivo
 y exportar la revisión para mandarla a un compañero.
 
 | Herramienta | Tecla | Cómo se usa |
 |---|---|---|
-| Distancia | `M` y `1` | Clic en dos puntos; se engancha a extremos, puntos medios y centros. Muestra el total y ΔX ΔY ΔZ |
+| Distancia | `M` y `1` | Clic en dos puntos. Muestra el total y ΔX ΔY ΔZ; con Orto, solo la componente ("Vertical: 70 mm") |
 | Radio y diámetro | `M` y `2` | Clic sobre un círculo, un arco o un agujero |
 | Ángulo | `M` y `3` | Tres clics (vértice en el medio) o clic en dos líneas |
 | Área y perímetro | `M` y `4` | Clic dentro de un contorno cerrado del plano o sobre una cara de la pieza |
 | Resaltador | `H` | Arrastrar; `Q` cambia entre amarillo, verde y rosa |
-| Subrayado | `U` | Arrastrar; con `Shift` sale horizontal o vertical |
+| Subrayado | `U` | Arrastrar; con `Shift` u Orto sale horizontal o vertical |
 | Nota con flecha | `N` | Clic en el punto a señalar, clic donde va el texto, escribir y `Enter` |
 | Rectángulo, elipse, nube | `R`, `E`, `C` | Arrastrar de esquina a esquina |
 | Lápiz | `L` | Trazo libre |
-| Color | `Q` | Rojo, amarillo, verde, azul, negro |
+| Color | `Q` | Rojo, amarillo, verde, azul, negro (o el menú Color de la cinta) |
 
-- `Shift` mientras se mide: sin enganche. `Esc`: termina la herramienta.
-- Clic en una marca la selecciona; `Supr` la borra; doble clic en una nota
-  edita su texto. `Ctrl+Z` y `Ctrl+Y` deshacen y rehacen.
+- `Esc` termina la herramienta. Clic en una marca la selecciona; `Supr` la
+  borra; doble clic en una nota edita su texto. `Ctrl+Z` y `Ctrl+Y` deshacen y
+  rehacen.
 - En un plano 2D las marcas se ven siempre. En una pieza 3D, las medidas y
   las notas siguen a la pieza al girarla; los trazos y formas quedan en la
   vista en que se dibujaron ("Vista 1", "Vista 2"...): al girar se ocultan y
-  `F2` abre la lista para volver a esa vista.
+  el panel lateral lleva de vuelta a esa vista.
 - Las marcas se guardan solas al cerrar o al abrir otro archivo (y con
   `Ctrl+S`) en `<archivo>.marcas`, al lado del modelo: si se copia la carpeta,
   las marcas van con ella. Si el modelo cambia después de marcarlo, se avisa.
-- `Ctrl+E` exporta: **PDF** con la vista general, una página por cada vista
-  marcada y la tabla de medidas y notas; o **PNG** de la vista actual.
-- En el **panel de vista previa** se puede medir con `M` (sin barra); esas
-  medidas no se guardan. Windows no le dice al panel dónde está el archivo, así
-  que ahí no se ven las marcas guardadas.
+- **Exportar PDF** (`Ctrl+E`): vista general, una página por cada vista
+  marcada y la tabla de medidas y notas. **Exportar PNG**: la vista actual.
+- En el **panel de vista previa** se mide con la mini barra flotante de arriba
+  (o `M`); esas medidas no se guardan. Windows no le dice al panel dónde está el
+  archivo, así que ahí no se ven las marcas guardadas.
+
+## Enganche a objetos (OSNAP) y restricciones
+
+Al medir, el cursor se engancha a los puntos notables del dibujo o de la pieza.
+Un marcador verde muestra el tipo de punto y un rótulo dice su nombre.
+
+| Modo | Punto | Marcador | Por defecto |
+|---|---|---|---|
+| Extremo | Extremos de rectas y arcos | cuadrado | sí |
+| Punto medio | Mitad de rectas y arcos | triángulo | sí |
+| Centro | Centro de círculos y arcos | círculo | sí |
+| Cuadrante | 0°, 90°, 180° y 270° de círculos y arcos | rombo | sí |
+| Intersección | Cruce de rectas y arcos | X | sí |
+| Extensión | Cruce de las prolongaciones de dos rectas (vértice de una esquina redondeada o achaflanada) | X punteada | no |
+| Perpendicular | Pie de la perpendicular desde el primer punto | escuadra | no |
+| Tangente | Tangencia desde el primer punto a un círculo | círculo y tangente | no |
+| Más cercano | Cualquier punto de una arista | reloj de arena | no |
+
+- **Ejemplo, largo de una ranura:** con Cuadrante encendido, clic en la punta
+  de un extremo redondeado y en la del otro: 70 mm exactos. El ancho sale de
+  extremo a extremo de los arcos.
+- Si hay varios candidatos bajo el cursor gana el de mayor prioridad
+  (Intersección, Extremo, Centro, Cuadrante, Medio, Perpendicular, Tangente,
+  Extensión); `Tab` pasa al siguiente y `Shift+Tab` al anterior.
+- `F3` enciende o apaga el enganche; `Shift` lo apaga mientras se mantiene.
+  Los modos se eligen en la pestaña Medir o con clic derecho en **OSNAP**.
+- **Orto** (`F8`): la segunda punta de la distancia queda en horizontal o
+  vertical (ejes X, Y o Z en 3D) y la cota lo dice.
+- **Polar** (`F10`): la dirección se ajusta a múltiplos de 15°, 30°, 45° o 90°
+  cuando el cursor pasa a menos de 3°; se ve una guía punteada y el ángulo.
+  Orto y Polar se excluyen.
 
 ## Instalacion
 
@@ -136,11 +199,11 @@ siempre iconos, nunca miniaturas", y borra la cache
 
 ## Uso del visor y del panel
 
-Los dos usan los mismos controles; el panel muestra una barra de ayuda mas corta.
+Los dos usan los mismos controles de vista.
 
 | Accion | Control |
 |---|---|
-| Girar | Arrastrar con el boton izquierdo |
+| Girar | Arrastrar con el boton izquierdo, o clic en el cubo de vistas |
 | Mover | Arrastrar con el boton derecho o el central |
 | Zoom | Rueda del raton |
 | Encuadrar | `F` o doble clic |
@@ -149,9 +212,10 @@ Los dos usan los mismos controles; el panel muestra una barra de ayuda mas corta
 | Alambre | `W` |
 | Aristas | `A` (en el panel tambien `E`) |
 | Medir | `M` (luego `1`-`4`) |
+| Enganche / Orto / Polar | `F3` / `F8` / `F10`; `Tab` cambia de candidato |
 | Marcar (solo visor) | `H` `U` `N` `R` `E` `C` `L`, color `Q` |
-| Lista de marcas | `F2` |
-| Guardar marcas / Exportar | `Ctrl+S` / `Ctrl+E` |
+| Panel de marcas y propiedades | `F2` |
+| Guardar marcas / Exportar PDF | `Ctrl+S` / `Ctrl+E` |
 | Perspectiva / ortografica | `P` |
 | Abrir archivo | `Ctrl+O`, o arrastrar el archivo a la ventana |
 
@@ -184,7 +248,9 @@ src/formats    IGES, DXF, STL, OBJ, PLY y extraccion de vistas previas
 src/render     rasterizador por software (z-buffer, luces, aristas)
 src/shellext   extensiones COM: miniatura y panel de vista previa
 src/export     escritor de PDF
-src/viewer     SceneView (vista 3D interactiva), textos de planos y el visor independiente
+src/viewer     SceneView (vista 3D interactiva), herramientas de medir y marcar, y el visor
+src/viewer/ui  tema grafito, iconos vectoriales, cinta, barra de estado, panel, cubo de vistas
+src/ui         logica de interfaz sin Windows (distribucion de la cinta, cubo, recientes)
 src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
 ```
 
@@ -205,6 +271,14 @@ src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
   principal y el manejador de vista previa la crea dentro de la ventana que le
   entrega `prevhost.exe`, de modo que el panel del Explorador es interactivo de
   verdad, no una imagen.
+- **Enganche** (`measure.cpp`): extremos, medios, centros y cuadrantes se
+  indexan al cargar (BVH de puntos); intersecciones, extensiones,
+  perpendiculares y tangentes se calculan al vuelo solo con las rectas y los
+  círculos exactos que están bajo el cursor. Con todos los modos encendidos una
+  consulta tarda ~1,5 ms en un plano de 1,5 millones de segmentos.
+- **Interfaz** (`src/viewer/ui`): dibujada con GDI+ (sin Ribbon Framework ni
+  WebView), escalada por DPI, con la barra de título propia por `WM_NCCALCSIZE`
+  y `WM_NCHITTEST`.
 - **Render** (`renderer.cpp`): rasterizador propio con z-buffer, dos luces en
   espacio de camara, supermuestreo y aristas superpuestas con sesgo de
   profundidad. Sin GPU: el proceso que genera miniaturas en Windows es de baja
@@ -276,7 +350,11 @@ python3 tests/make_dxf_samples.py tests/samples  # planos DXF (pip install ezdxf
 
 `tests/unit_tests.cpp` cubre el lector DXF (arcos por bulge, elipses, splines,
 bloques, cotas, capas, espacio papel, textos y codificaciones), la deteccion de
-planos y la camara 2D; corre tambien en cada push. `plano_brida.dxf` es un plano
+planos y la camara 2D, el enganche a objetos (cuadrantes de la ranura de
+`plano_brida.dxf`, intersecciones, extension, perpendicular, tangente, orden de
+`Tab` y rendimiento con todos los modos), Orto y Polar, medidas y marcas, el PDF
+y la logica pura de la interfaz (distribucion de la cinta, cubo de vistas,
+recientes); corre tambien en cada push. `plano_brida.dxf` es un plano
 con todo lo anterior y `pieza_3d.dxf` una caja de `3DFACE` que tiene que seguir
 viendose en 3D.
 
