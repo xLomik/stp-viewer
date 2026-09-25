@@ -18,6 +18,8 @@
 #include "ui/commands.h"
 #include "ui/popup_menu.h"
 #include "ui/ribbon.h"
+#include "ui/side_panel.h"
+#include "ui/start_page.h"
 #include "ui/status_bar.h"
 #include "ui/theme.h"
 
@@ -85,14 +87,25 @@ struct Frame {
     stp::SceneView view;
     Ribbon ribbon;
     StatusBar status;
+    SidePanel panel;
+    stp::ui::StartPage start;
     RecentFiles recent;
     bool statusVisible = true;
-    bool panelVisible = false;
+    bool panelVisible = true;
+    bool panelFloatOpen = false;  // ventana angosta: panel flotante abierto con F2
+    bool lastLoading = false;
+    bool lastModel = false;
     bool cubeVisible = true;
     int hotButton = -1;  // 0 minimizar, 1 maximizar, 2 cerrar
     bool trackingMouse = false;
 
     int titleHeight() const { return scale(32, dpi); }
+    bool narrow() const {
+        RECT client;
+        GetClientRect(hwnd, &client);
+        return client.right < scale(640, dpi);
+    }
+    bool panelShown() const { return !g_currentFile.empty() && (narrow() ? panelFloatOpen : panelVisible); }
     int buttonWidth() const { return scale(46, dpi); }
     RECT buttonRect(int index) const {
         RECT client;
@@ -139,7 +152,21 @@ void Frame::layout() {
     ShowWindow(status.hwnd(), statusVisible ? SW_SHOWNA : SW_HIDE);
     if (statusVisible) MoveWindow(status.hwnd(), 0, client.bottom - statusHeight, client.right, statusHeight, TRUE);
     const RECT content = {0, top + ribbonHeight, client.right, client.bottom - statusHeight};
-    if (view.hwnd()) view.setRect(content);
+    const bool file = !g_currentFile.empty();
+    ShowWindow(start.hwnd(), file ? SW_HIDE : SW_SHOWNA);
+    if (!file) MoveWindow(start.hwnd(), content.left, content.top, content.right - content.left, content.bottom - content.top, TRUE);
+    if (view.hwnd()) ShowWindow(view.hwnd(), file ? SW_SHOWNA : SW_HIDE);
+    const bool showPanel = panelShown();
+    const int panelWidth = std::min(scale(panel.preferredWidth(), dpi), static_cast<int>(content.right) / 2 + scale(60, dpi));
+    RECT viewRect = content;
+    if (showPanel && !narrow()) viewRect.right -= panelWidth;
+    if (view.hwnd()) view.setRect(viewRect);
+    ShowWindow(panel.hwnd(), showPanel ? SW_SHOWNA : SW_HIDE);
+    if (showPanel) {
+        // Angosta: el panel flota encima del borde derecho de la vista.
+        SetWindowPos(panel.hwnd(), HWND_TOP, content.right - panelWidth, content.top, panelWidth, content.bottom - content.top,
+                     SWP_NOACTIVATE);
+    }
     RECT strip = {0, 0, client.right, top};
     InvalidateRect(hwnd, &strip, FALSE);
 }
@@ -216,7 +243,7 @@ CommandState Frame::state(int command) const {
             s.enabled = model && !v.plan2d();
             s.checked = v.perspective();
             break;
-        case kCmdPanel: s.checked = panelVisible; break;
+        case kCmdPanel: s.checked = panelShown(); break;
         case kCmdStatusBar: s.checked = statusVisible; break;
         case kCmdViewCube: s.checked = cubeVisible; break;
         default: break;
@@ -264,7 +291,10 @@ void Frame::execute(int command) {
             const std::wstring path = recent.items()[index];
             if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
                 const std::wstring question = L"No se encuentra\n" + path + L"\n\n¿Quitarlo de la lista de recientes?";
-                if (MessageBoxW(hwnd, question.c_str(), L"Visor STP", MB_YESNO | MB_ICONQUESTION) == IDYES) recent.remove(path);
+                if (MessageBoxW(hwnd, question.c_str(), L"Visor STP", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                    recent.remove(path);
+                    start.setRecent(recent.items());
+                }
             } else {
                 openFile(path);
             }
@@ -361,7 +391,12 @@ void Frame::execute(int command) {
             case kCmdWireframe: view.setShaded(false); break;
             case kCmdEdges: view.setEdges(!view.edges()); break;
             case kCmdPerspective: view.setPerspective(!view.perspective()); break;
-            case kCmdPanel: panelVisible = !panelVisible; layout(); break;
+            case kCmdPanel:
+                if (narrow()) panelFloatOpen = !panelFloatOpen;
+                else panelVisible = !panelVisible;
+                layout();
+                panel.refresh();
+                break;
             case kCmdStatusBar: statusVisible = !statusVisible; layout(); break;
             case kCmdViewCube: cubeVisible = !cubeVisible; break;
             case kCmdRibbonToggle: layout(); break;
@@ -372,6 +407,13 @@ void Frame::execute(int command) {
 }
 
 void Frame::refreshStatus() {
+    // Termino una carga: el panel y la cinta muestran el modelo nuevo.
+    if (view.loading() != lastLoading || view.hasModel() != lastModel) {
+        lastLoading = view.loading();
+        lastModel = view.hasModel();
+        panel.refresh();
+        ribbon.refresh();
+    }
     StatusBar::State s;
     stp::MarkupTools* tools = view.tools();
     if (tools) {
@@ -470,8 +512,11 @@ void Frame::openFile(const std::wstring& path) {
     }
     g_currentFile = path;
     recent.add(path);
+    start.setRecent(recent.items());
     view.loadFile(path);
+    layout();
     view.focus();
+    panel.refresh();
     refreshAll();
 }
 
@@ -712,6 +757,10 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (f) f->layout();
             return 0;
 
+        case kPanelResized:
+            if (f) f->layout();
+            return 0;
+
         case WM_ACTIVATE:
             if (f) {
                 RECT strip = {0, 0, 10000, f->titleHeight()};
@@ -810,19 +859,28 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     frame.view.setChrome(true);
     frame.view.setMarkupListener([&frame]() {
         frame.ribbon.refresh();
+        frame.panel.refresh();
         frame.updateTitle();
     });
     frame.view.setStatusListener([&frame]() { frame.refreshStatus(); });
     RECT client;
     GetClientRect(hwnd, &client);
     if (!frame.view.create(instance, hwnd, client)) return 1;
+    frame.panel.create(instance, hwnd);
+    frame.panel.setDpi(frame.dpi);
+    frame.panel.attach(&frame.view);
+    frame.start.create(instance, hwnd);
+    frame.start.setDpi(frame.dpi);
+    frame.start.setRecent(frame.recent.items());
     frame.layout();
 
     ShowWindow(hwnd, showCmd);
     UpdateWindow(hwnd);
 
+    // Con la linea vacia CommandLineToArgvW devuelve la ruta del propio programa.
+    while (commandLine && (*commandLine == L' ' || *commandLine == L'\t')) ++commandLine;
     int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(commandLine, &argc);
+    LPWSTR* argv = commandLine && *commandLine ? CommandLineToArgvW(commandLine, &argc) : nullptr;
     if (argv) {
         if (argc >= 1 && argv[0] && argv[0][0]) frame.openFile(argv[0]);
         LocalFree(argv);

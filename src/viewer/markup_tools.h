@@ -97,6 +97,10 @@ public:
     std::uint32_t color() const { return m_tool == Tool::Highlight ? m_highlight : m_color; }
     int hiddenCount(const Camera& camera) const;  // marcas de otras vistas
     int selected() const { return m_selected; }
+    const Mark* markById(int id) const;
+    // Cambios desde el panel de propiedades, con deshacer.
+    bool setMarkColor(int id, std::uint32_t argb);
+    bool setNoteText(int id, const std::string& utf8);
     void select(int id);
 
 private:

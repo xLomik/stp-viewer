@@ -290,6 +290,33 @@ void MarkupTools::select(int id) {
     m_host->markupRedraw();
 }
 
+const Mark* MarkupTools::markById(int id) const {
+    const auto it = std::find_if(m_doc.marks.begin(), m_doc.marks.end(), [&](const Mark& m) { return m.id == id; });
+    return it == m_doc.marks.end() ? nullptr : &*it;
+}
+
+bool MarkupTools::setMarkColor(int id, std::uint32_t argb) {
+    const auto it = std::find_if(m_doc.marks.begin(), m_doc.marks.end(), [&](const Mark& m) { return m.id == id; });
+    if (it == m_doc.marks.end() || it->color == argb) return false;
+    pushUndo();  // copia el documento; it sigue valido
+    it->color = argb;
+    m_dirty = true;
+    m_host->markupRedraw();
+    m_host->markupChanged();
+    return true;
+}
+
+bool MarkupTools::setNoteText(int id, const std::string& utf8) {
+    const auto it = std::find_if(m_doc.marks.begin(), m_doc.marks.end(), [&](const Mark& m) { return m.id == id; });
+    if (it == m_doc.marks.end() || it->kind != MarkKind::Note || it->text == utf8) return false;
+    pushUndo();
+    it->text = utf8;
+    m_dirty = true;
+    m_host->markupRedraw();
+    m_host->markupChanged();
+    return true;
+}
+
 void MarkupTools::deleteSelected() {
     const auto it = std::find_if(m_doc.marks.begin(), m_doc.marks.end(),
                                  [&](const Mark& m) { return m.id == m_selected; });
@@ -957,14 +984,14 @@ std::wstring MarkupTools::describe(const Mark& mark) const {
         case MarkKind::Distance: return L"Distancia  " + v.label;
         case MarkKind::Radius: return L"Radio  " + v.label + L"  " + v.detail;
         case MarkKind::Angle: return L"\u00c1ngulo  " + v.label;
-        case MarkKind::Area: return L"Area  " + v.label + L"  " + v.detail;
+        case MarkKind::Area: return L"\u00c1rea  " + v.label + L"  " + v.detail;
         case MarkKind::Note: return L"Nota: " + widen(mark.text);
         case MarkKind::Highlight: return L"Resaltado";
         case MarkKind::Underline: return L"Subrayado";
         case MarkKind::Pen: return L"Trazo";
-        case MarkKind::Rectangle: return L"Rectangulo";
+        case MarkKind::Rectangle: return L"Rect\u00e1ngulo";
         case MarkKind::Ellipse: return L"Elipse";
-        case MarkKind::Cloud: return L"Nube de revision";
+        case MarkKind::Cloud: return L"Nube de revisi\u00f3n";
     }
     return std::wstring();
 }
