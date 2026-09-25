@@ -20,6 +20,9 @@
 #include "../src/engine/nurbs.h"
 #include "../src/formats/formats.h"
 #include "../src/render/renderer.h"
+#include "../src/ui/recent_files.h"
+#include "../src/ui/ribbon_layout.h"
+#include "../src/ui/view_cube_math.h"
 
 namespace {
 
@@ -1779,6 +1782,103 @@ TEST(pdf_text_is_winansi_and_escaped) {
     stp::PdfWriter pdf;
     pdf.addPage({}, 0, 0, 0, 0, 0, 0, {{10, 10, 10, "a(b)c\\", false}});
     CHECK(pdf.finish().find("(a\\(b\\)c\\\\) Tj") != std::string::npos);
+}
+
+// --- Interfaz (logica pura) ------------------------------------------------------------
+
+namespace {
+bool sizesAre(const std::vector<stp::ui::GroupSize>& got, std::initializer_list<stp::ui::GroupSize> want) {
+    return got == std::vector<stp::ui::GroupSize>(want);
+}
+}  // namespace
+
+TEST(ribbon_layout_shrinks_right_to_left) {
+    using stp::ui::GroupSize;
+    const std::vector<stp::ui::RibbonGroupSpec> groups(3, stp::ui::RibbonGroupSpec{200, 120, 50});
+    const GroupSize L = GroupSize::Large, S = GroupSize::Small, C = GroupSize::Collapsed;
+    CHECK(sizesAre(stp::ui::layoutRibbon(groups, 700, 4, false), {L, L, L}));
+    CHECK(sizesAre(stp::ui::layoutRibbon(groups, 540, 4, false), {L, L, S}));
+    CHECK(sizesAre(stp::ui::layoutRibbon(groups, 400, 4, false), {S, S, S}));
+    CHECK(sizesAre(stp::ui::layoutRibbon(groups, 300, 4, false), {S, S, C}));
+    CHECK(sizesAre(stp::ui::layoutRibbon(groups, 100, 4, false), {C, C, C}));
+    CHECK(sizesAre(stp::ui::layoutRibbon(groups, 5000, 4, true), {S, S, S}));
+    CHECK(stp::ui::ribbonWidth(groups, {L, L, S}, 4) == 528);
+}
+
+TEST(ribbon_layout_never_overflows_when_possible) {
+    std::mt19937 random(3);
+    std::uniform_int_distribution<int> large(80, 260), count(1, 7), width(100, 1600);
+    for (int round = 0; round < 500; ++round) {
+        std::vector<stp::ui::RibbonGroupSpec> groups(static_cast<std::size_t>(count(random)));
+        for (auto& g : groups) {
+            g.large = large(random);
+            g.small = g.large * 2 / 3;
+            g.collapsed = 48;
+        }
+        const int available = width(random);
+        const auto sizes = stp::ui::layoutRibbon(groups, available, 6, false);
+        CHECK(sizes.size() == groups.size());
+        const std::vector<stp::ui::GroupSize> tiny(groups.size(), stp::ui::GroupSize::Collapsed);
+        if (stp::ui::ribbonWidth(groups, tiny, 6) <= available) {
+            CHECK(stp::ui::ribbonWidth(groups, sizes, 6) <= available);
+        }
+    }
+}
+
+TEST(view_cube_region_under_cursor) {
+    stp::Camera front;
+    front.yaw = -stp::kPi / 2;
+    front.pitch = 0.0;
+    CHECK((stp::ui::cubeRegionAt(front, 0, 0, 50) == stp::ui::CubeRegion{0, -1, 0}));
+    CHECK((stp::ui::cubeRegionAt(front, 45, 0, 50) == stp::ui::CubeRegion{1, -1, 0}));
+    CHECK((stp::ui::cubeRegionAt(front, 45, -45, 50) == stp::ui::CubeRegion{1, -1, 1}));
+    CHECK((stp::ui::cubeRegionAt(front, 0, 45, 50) == stp::ui::CubeRegion{0, -1, -1}));
+    CHECK(!stp::ui::cubeRegionAt(front, 60, 0, 50).valid());
+    stp::Camera iso;  // isometrica: se ve la esquina (+X, -Y, +Z) en el centro
+    CHECK((stp::ui::cubeRegionAt(iso, 0, 0, 50) == stp::ui::CubeRegion{1, -1, 1}));
+    CHECK(std::string(stp::ui::cubeFaceName(0, 0, 1)) == "Superior");
+    CHECK(std::string(stp::ui::cubeFaceName(0, -1, 0)) == "Frente");
+    CHECK(stp::ui::cubeFaceName(1, -1, 0) == nullptr);
+}
+
+TEST(view_cube_orientation_per_region) {
+    double yaw = 0, pitch = 0;
+    stp::ui::cubeOrientation({0, -1, 0}, &yaw, &pitch);
+    CHECK_NEAR(yaw, -stp::kPi / 2, 1e-12);
+    CHECK_NEAR(pitch, 0.0, 1e-12);
+    stp::ui::cubeOrientation({0, 0, 1}, &yaw, &pitch);
+    CHECK_NEAR(pitch, 1.5533430, 1e-7);  // limite de la orbita, como la tecla 5
+    CHECK_NEAR(yaw, -stp::kPi / 2, 1e-12);
+    stp::ui::cubeOrientation({1, -1, 1}, &yaw, &pitch);
+    CHECK_NEAR(yaw, -stp::kPi / 4, 1e-12);
+    CHECK_NEAR(pitch, std::asin(1 / std::sqrt(3.0)), 1e-12);
+    stp::ui::cubeOrientation({-1, 0, 0}, &yaw, &pitch);
+    CHECK_NEAR(std::fabs(yaw), stp::kPi, 1e-12);
+    // La animacion gira por el camino corto.
+    stp::ui::interpolateOrientation(3.0, 0.0, -3.0, 0.0, 0.5, &yaw, &pitch);
+    CHECK_NEAR(std::fabs(yaw), stp::kPi, 1e-3);
+    stp::ui::interpolateOrientation(0.0, 0.0, 1.0, 0.5, 1.0, &yaw, &pitch);
+    CHECK_NEAR(yaw, 1.0, 1e-12);
+    CHECK_NEAR(pitch, 0.5, 1e-12);
+}
+
+TEST(recent_files_dedupe_case_insensitive) {
+    stp::ui::RecentFiles recent;
+    recent.add(L"C:\\Planos\\a.dxf");
+    recent.add(L"C:\\Planos\\b.stp");
+    recent.add(L"c:/planos/A.DXF");
+    CHECK(recent.items().size() == 2);
+    CHECK(recent.items()[0] == L"c:/planos/A.DXF");
+    CHECK(recent.items()[1] == L"C:\\Planos\\b.stp");
+    for (int i = 0; i < 15; ++i) recent.add(L"C:\\x\\" + std::to_wstring(i) + L".stp");
+    CHECK(recent.items().size() == stp::ui::RecentFiles::kLimit);
+    CHECK(recent.items()[0] == L"C:\\x\\14.stp");
+    CHECK(recent.remove(L"c:\\X\\14.STP"));
+    CHECK(!recent.remove(L"C:\\nada.stp"));
+    CHECK(recent.items()[0] == L"C:\\x\\13.stp");
+    recent.setItems({L"a", L"A", L"", L"b"});
+    CHECK(recent.items().size() == 2);
+    CHECK(stp::ui::samePath(L"C:\\A\\b.dxf", L"c:/a/B.DXF"));
 }
 
 int main() {
