@@ -57,7 +57,7 @@ del español.
 | Extremo | Extremos de rectas y de arcos | cuadrado | sí |
 | Punto medio | Mitad de rectas y mitad de arcos | triángulo | sí |
 | Centro | Centro de círculos y arcos | círculo | sí |
-| Cuadrante | 0°, 90°, 180°, 270° de círculos y arcos (dentro del arco), en los ejes del dibujo (2D) o del marco del círculo (3D) | rombo | sí |
+| Cuadrante | 0°, 90°, 180°, 270° de círculos y arcos (dentro del arco), medidos desde el eje X del mundo proyectado al plano del círculo (o el Y si el X es perpendicular) | rombo | sí |
 | Intersección | Cruce real de dos elementos cercanos (recta-recta, recta-arco, arco-arco) | X | sí |
 | Extensión | Cruce de las prolongaciones de dos rectas cercanas (vértice de una esquina redondeada o achaflanada) | X punteada | no |
 | Perpendicular | Pie de la perpendicular desde el primer punto a una recta (su recta completa) o a un círculo | escuadra | no |
@@ -73,9 +73,9 @@ del español.
 ### 3.2 Elección del candidato
 
 - Radio de captura: 8 px (escalado por DPI).
-- Se ofrece el candidato más cercano al cursor en pantalla; a igual distancia
-  (±1 px) gana el de mayor prioridad: Intersección, Extremo, Centro, Cuadrante,
-  Medio, Perpendicular, Tangente, Extensión, Más cercano.
+- Entre los candidatos a menos de 1,5 px del más cercano gana el de mayor
+  prioridad: Intersección, Extremo, Centro, Cuadrante, Medio, Perpendicular,
+  Tangente, Extensión. "Más cercano" solo se ofrece si no hay ningún otro.
 - `Tab` recorre los candidatos bajo el cursor en ese orden; `Shift+Tab` al revés.
 - Junto al marcador, un rótulo con el nombre del modo ("Cuadrante").
 - Sin candidato: punto de la cara (3D) o del plano (2D), como hoy.
@@ -101,12 +101,15 @@ del español.
   de puntos existente (`PickIndex`), construido en el hilo de carga.
 - Dinámicos (Intersección, Extensión, Perpendicular, Tangente, Más cercano): se
   consultan los segmentos y círculos con caja a menos del radio de captura del
-  cursor (Extensión: a menos de 3× el radio) y se calculan al vuelo.
-- Para saber qué segmentos son de la misma curva, `Mesh` guarda por segmento el
-  índice de su curva de origen (`edgeSource`), además de `edgeCurve`.
-- API nueva de motor: `SnapModes` (máscara de bits), `SnapConstraint`
+  cursor (Extensión: a menos de 12× el radio, porque en una esquina redondeada
+  las rectas terminan lejos del vértice) y se calculan al vuelo.
+- Intersección y Extensión usan rectas de verdad (`edgeCurve == 0`) y círculos
+  exactos (`features.circles`), no los tramos muestreados de las curvas; dos
+  rectas que comparten un extremo (esquina de una polilínea) no generan
+  intersección: ese punto ya es un Extremo.
+- API nueva de motor: modos `kSnap*` (máscara de bits), `SnapConstraint`
   (ninguna/orto/polar con ángulo), `PickIndex::snapAll` (lista ordenada de
-  candidatos) y `applyConstraint(first, point, constraint, plane)`.
+  candidatos) y `applyConstraint(first, point, constraint, camera, plane)`.
 
 ## 4. Interfaz del visor
 
