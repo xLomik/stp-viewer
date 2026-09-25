@@ -1,5 +1,7 @@
 #include "markup_tools.h"
 
+#include "ui/theme.h"
+
 #include <windowsx.h>
 #include <objidl.h>
 #include <gdiplus.h>
@@ -93,14 +95,7 @@ bool toScreen(const Camera& camera, int width, int height, const Vec3& p, Gdiplu
     return true;
 }
 
-// GDI+ no sustituye una fuente que falta (GDI si): sin Segoe UI se usa la
-// sans-serif generica del sistema.
-std::unique_ptr<Gdiplus::Font> uiFont(double size, INT style) {
-    auto font = std::make_unique<Gdiplus::Font>(L"Segoe UI", static_cast<Gdiplus::REAL>(size), style, Gdiplus::UnitPixel);
-    if (font->GetLastStatus() == Gdiplus::Ok && font->IsAvailable()) return font;
-    return std::make_unique<Gdiplus::Font>(Gdiplus::FontFamily::GenericSansSerif(), static_cast<Gdiplus::REAL>(size),
-                                           style, Gdiplus::UnitPixel);
-}
+std::unique_ptr<Gdiplus::Font> uiFont(double size, INT style) { return ui::fontPixels(size, style); }
 
 }  // namespace
 
