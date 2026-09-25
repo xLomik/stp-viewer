@@ -11,8 +11,14 @@ constexpr wchar_t kClass[] = L"StpViewerTooltip";
 constexpr int kWidth = 280;  // ancho maximo a 96 DPI
 }  // namespace
 
-Tooltip::~Tooltip() {
-    if (m_hwnd) DestroyWindow(m_hwnd);
+Tooltip::~Tooltip() { destroy(); }
+
+void Tooltip::destroy() {
+    if (m_hwnd) {
+        SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, 0);  // la ventana no vuelve a tocar este objeto
+        DestroyWindow(m_hwnd);
+    }
+    m_hwnd = nullptr;
 }
 
 bool Tooltip::create(HINSTANCE instance, HWND owner) {
@@ -24,6 +30,7 @@ bool Tooltip::create(HINSTANCE instance, HWND owner) {
     cls.lpszClassName = kClass;
     cls.style = CS_DROPSHADOW;
     RegisterClassExW(&cls);
+    destroy();  // una sola ventana por objeto aunque se cree de nuevo
     m_hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, kClass, L"",
                              WS_POPUP, 0, 0, 10, 10, owner, nullptr, instance, this);
     return m_hwnd != nullptr;

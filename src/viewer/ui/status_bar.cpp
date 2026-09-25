@@ -136,9 +136,14 @@ LRESULT StatusBar::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             m_tooltip.hide();
             InvalidateRect(m_hwnd, nullptr, FALSE);
             return 0;
+        case WM_LBUTTONDOWN:
+            m_pressed = pillAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+            return 0;
         case WM_LBUTTONUP: {
             const int pill = pillAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
-            if (pill >= 0) SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(kPillCommand[pill], 0), reinterpret_cast<LPARAM>(m_hwnd));
+            const int pressed = m_pressed;
+            m_pressed = -1;
+            if (pill >= 0 && pill == pressed) SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(kPillCommand[pill], 0), reinterpret_cast<LPARAM>(m_hwnd));
             return 0;
         }
         case WM_RBUTTONUP: {
@@ -169,7 +174,9 @@ LRESULT StatusBar::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             POINT anchor = {m_pills[pill].left, 0};
             ClientToScreen(m_hwnd, &anchor);
-            anchor.y -= static_cast<LONG>(items.size()) * scaled(28);
+            int menuHeight = scaled(8);
+            for (const MenuItem& item : items) menuHeight += item.separator ? scaled(9) : scaled(28);
+            anchor.y -= menuHeight;
             const int chosen = showPopupMenu(m_hwnd, anchor, items, m_dpi);
             if (chosen) SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(chosen, 0), reinterpret_cast<LPARAM>(m_hwnd));
             return 0;

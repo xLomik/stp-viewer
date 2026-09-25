@@ -155,7 +155,7 @@ bool SceneView::create(HINSTANCE instance, HWND parent, const RECT& rect) {
     ensureClass(instance);
 
     m_channel = std::make_shared<SceneLoadChannel>();
-    m_hwnd = CreateWindowExW(0, kClassName, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+    m_hwnd = CreateWindowExW(0, kClassName, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                              rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
                              parent, nullptr, instance, this);
     if (!m_hwnd) return false;
@@ -172,6 +172,7 @@ bool SceneView::create(HINSTANCE instance, HWND parent, const RECT& rect) {
 }
 
 void SceneView::destroy() {
+    m_barTip.destroy();
     if (m_image) {
         DeleteObject(m_image);
         m_image = nullptr;
@@ -1015,7 +1016,23 @@ LRESULT SceneView::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
     } else if (msg == WM_MOUSELEAVE) {
         m_trackingMouse = false;
     }
-    if (miniBarMessage(msg, lparam)) return msg == WM_SETCURSOR ? TRUE : 0;
+    if (msg == WM_SETCURSOR && LOWORD(lparam) == HTCLIENT && !m_mesh.empty()) {
+        // Flecha sobre la mini barra y el cubo, aunque haya una herramienta de medir activa.
+        POINT p;
+        GetCursorPos(&p);
+        ScreenToClient(m_hwnd, &p);
+        bool chrome = false;
+        if (miniBarVisible()) {
+            for (const BarButton& b : miniBarLayout()) chrome = chrome || PtInRect(&b.rect, p);
+        }
+        const RECT cube = cubeBounds();
+        if (m_cubeVisible && !m_image && PtInRect(&cube, p)) chrome = true;
+        if (chrome) {
+            SetCursor(LoadCursor(nullptr, IDC_ARROW));
+            return TRUE;
+        }
+    }
+    if (miniBarMessage(msg, lparam)) return 0;
     const bool onCube = cubeMessage(msg, lparam);
     if (onCube && msg == WM_LBUTTONUP) {
         ReleaseCapture();

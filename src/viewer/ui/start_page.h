@@ -27,9 +27,11 @@ private:
     HWND m_parent = nullptr;
     int m_dpi = 96;
     std::vector<std::wstring> m_recent;
+    std::vector<bool> m_missing;  // se mira al cargar la lista, no en cada repintado
     RECT m_open = {};
     std::vector<RECT> m_rows;
     int m_hot = -2;  // -1 = boton Abrir, >= 0 = reciente
+    int m_pressed = -2;
     bool m_tracking = false;
 };
 

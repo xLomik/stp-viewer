@@ -24,6 +24,10 @@ public:
     void refresh();
     int preferredWidth() const { return m_width; }  // a 96 DPI
     void setPreferredWidth(int width);
+    // Confirma el texto de nota que se esta escribiendo (antes de guardar o abrir otro).
+    void commitEdit() {
+        if (m_edit && GetFocus() == m_edit) commitNote();
+    }
 
 private:
     struct Row {

@@ -84,6 +84,7 @@ void Ribbon::setTab(int tab) {
 void Ribbon::setCollapsed(bool collapsed) {
     m_collapsed = collapsed;
     m_peek = false;
+    if (m_hwnd) KillTimer(m_hwnd, kPeekTimer);
     layout();
     InvalidateRect(m_hwnd, nullptr, FALSE);
 }

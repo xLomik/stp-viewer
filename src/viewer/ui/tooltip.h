@@ -19,6 +19,7 @@ public:
     void show(const CommandInfo& info, POINT anchor, int dpi);
     void show(const std::wstring& title, const std::wstring& shortcut, const std::wstring& help, POINT anchor, int dpi);
     void hide();
+    void destroy();
     bool visible() const { return m_hwnd && IsWindowVisible(m_hwnd); }
 
 private:

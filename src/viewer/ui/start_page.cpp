@@ -33,6 +33,8 @@ void StartPage::setDpi(int dpi) {
 
 void StartPage::setRecent(const std::vector<std::wstring>& items) {
     m_recent = items;
+    m_missing.clear();
+    for (const std::wstring& path : items) m_missing.push_back(GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES);
     InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
@@ -90,7 +92,7 @@ void StartPage::paint() {
         const auto name = font(10, m_dpi);
         for (std::size_t i = 0; i < m_recent.size(); ++i) {
             const std::wstring& path = m_recent[i];
-            const bool missing = GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES;
+            const bool missing = i < m_missing.size() && m_missing[i];
             const float rh = static_cast<float>(scaled(44));
             const Gdiplus::RectF row(left - scaled(8), y, column + scaled(16), rh);
             m_rows.push_back(RECT{static_cast<LONG>(row.X), static_cast<LONG>(row.Y), static_cast<LONG>(row.X + row.Width),
@@ -146,7 +148,12 @@ LRESULT StartPage::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             m_hot = -2;
             InvalidateRect(m_hwnd, nullptr, FALSE);
             return 0;
+        case WM_LBUTTONDOWN:
+            m_pressed = m_hot;
+            return 0;
         case WM_LBUTTONUP:
+            if (m_pressed != m_hot) return 0;  // la pulsacion empezo en otro lado
+            m_pressed = -2;
             if (m_hot == -1) PostMessageW(m_parent, WM_COMMAND, MAKEWPARAM(kCmdOpen, 0), 0);
             else if (m_hot >= 0) PostMessageW(m_parent, WM_COMMAND, MAKEWPARAM(kCmdRecentFirst + m_hot, 0), 0);
             return 0;

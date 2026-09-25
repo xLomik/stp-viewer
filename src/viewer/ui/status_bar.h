@@ -53,6 +53,7 @@ private:
     State m_state;
     RECT m_pills[kPills] = {};
     int m_hot = -1;
+    int m_pressed = -1;
     bool m_tracking = false;
 };
 

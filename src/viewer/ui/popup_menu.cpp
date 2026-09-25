@@ -104,6 +104,11 @@ LRESULT CALLBACK menuProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             break;
         case WM_ERASEBKGND: return 1;
         case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+        case WM_CAPTURECHANGED:
+        case WM_CANCELMODE:
+            // Otra ventana tomo el raton (Alt+Tab, un dialogo): el menu se cierra.
+            if (s) s->done = true;
+            return 0;
         default: break;
     }
     return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -171,7 +176,8 @@ int showPopupMenu(HWND owner, POINT screen, const std::vector<MenuItem>& items, 
         switch (msg.message) {
             case WM_MOUSEMOVE:
                 if (msg.hwnd == hwnd) {
-                    const int hot = rowAt(s, GET_Y_LPARAM(msg.lParam));
+                    const int mx = GET_X_LPARAM(msg.lParam);
+                    const int hot = mx >= 0 && mx < width ? rowAt(s, GET_Y_LPARAM(msg.lParam)) : -1;
                     if (hot != s.hot) {
                         s.hot = hot;
                         InvalidateRect(hwnd, nullptr, FALSE);
@@ -190,7 +196,8 @@ int showPopupMenu(HWND owner, POINT screen, const std::vector<MenuItem>& items, 
             }
             case WM_LBUTTONUP:
                 if (msg.hwnd == hwnd) {
-                    const int i = rowAt(s, GET_Y_LPARAM(msg.lParam));
+                    const int mx = GET_X_LPARAM(msg.lParam);
+                    const int i = mx >= 0 && mx < width ? rowAt(s, GET_Y_LPARAM(msg.lParam)) : -1;
                     if (selectable(s, i)) {
                         s.chosen = items[static_cast<std::size_t>(i)].id;
                         s.done = true;
@@ -213,7 +220,6 @@ int showPopupMenu(HWND owner, POINT screen, const std::vector<MenuItem>& items, 
             default:
                 break;
         }
-        if (GetCapture() != hwnd && !s.done) SetCapture(hwnd);
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

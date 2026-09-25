@@ -98,6 +98,7 @@ struct Frame {
     bool lastModel = false;
     bool cubeVisible = true;
     int hotButton = -1;  // 0 minimizar, 1 maximizar, 2 cerrar
+    int pressedButton = -1;
     bool trackingMouse = false;
 
     int titleHeight() const { return scale(32, dpi); }
@@ -283,7 +284,8 @@ void Frame::execute(int command) {
         if (tools && view.hasModel()) tools->setTool(static_cast<stp::Tool>(command - kCmdTool));
     } else if (command >= kCmdSnapMode && command < kCmdSnapMode + 9) {
         snapChange([&](stp::SnapSettings& s) { s.modes ^= 1u << (command - kCmdSnapMode); });
-    } else if (command >= kCmdPolarStep && command <= kCmdPolarStep + 90) {
+    } else if (command == kCmdPolarStep + 15 || command == kCmdPolarStep + 30 || command == kCmdPolarStep + 45 ||
+               command == kCmdPolarStep + 90) {
         snapChange([&](stp::SnapSettings& s) {
             s.constraint.polarStepDegrees = command - kCmdPolarStep;
             s.constraint.kind = stp::ConstraintKind::Polar;
@@ -546,6 +548,7 @@ void Frame::openFile(const std::wstring& given) {
     wchar_t full[MAX_PATH] = {};
     const DWORD length = GetFullPathNameW(given.c_str(), MAX_PATH, full, nullptr);
     const std::wstring path = length > 0 && length < MAX_PATH ? std::wstring(full) : given;
+    panel.commitEdit();
     std::wstring problem;
     if (!view.saveMarks(&problem)) {
         const std::wstring question = problem + L"\n\nSi abres otro archivo, esas marcas se pierden. ¿Abrir de todos modos?";
@@ -582,6 +585,7 @@ void Frame::promptOpen() {
 }
 
 void Frame::saveMarks() {
+    panel.commitEdit();
     if (!view.tools() || !view.hasModel()) return;
     std::wstring problem;
     const bool saved = view.saveMarks(&problem);
@@ -611,6 +615,7 @@ std::wstring baseName() {
 }
 
 void Frame::exportPng() {
+    panel.commitEdit();
     if (!view.tools() || !view.hasModel()) return;
     view.tools()->commitPendingEdit();
     const std::wstring target = askSavePath(hwnd, baseName() + L".png", L"Imagen PNG (*.png)\0*.png\0", L"png");
@@ -624,6 +629,7 @@ void Frame::exportPng() {
 }
 
 void Frame::exportPdf() {
+    panel.commitEdit();
     if (!view.tools() || !view.hasModel()) return;
     view.tools()->commitPendingEdit();
     const std::wstring target = askSavePath(hwnd, baseName() + L"-revision.pdf", L"PDF con todas las vistas (*.pdf)\0*.pdf\0", L"pdf");
@@ -775,9 +781,16 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 InvalidateRect(hwnd, &strip, FALSE);
             }
             return 0;
+        case WM_LBUTTONDOWN:
+            if (f) f->pressedButton = f->buttonAt(POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)});
+            return 0;
         case WM_LBUTTONUP:
             if (f) {
-                switch (f->buttonAt(POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)})) {
+                // Solo si la pulsacion empezo en el mismo boton (no una que viene de un dialogo).
+                const int button = f->buttonAt(POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)});
+                const int pressed = f->pressedButton;
+                f->pressedButton = -1;
+                switch (button == pressed ? button : -1) {
                     case 0: ShowWindow(hwnd, SW_MINIMIZE); break;
                     case 1: ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE); break;
                     case 2: PostMessageW(hwnd, WM_CLOSE, 0, 0); break;
@@ -840,6 +853,7 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_CLOSE: {
+            if (f) f->panel.commitEdit();
             std::wstring problem;
             if (f && !f->view.saveMarks(&problem)) {
                 const std::wstring question = problem + L"\n\n¿Cerrar de todos modos?";
@@ -897,12 +911,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     frame.cubeVisible = settings.cubeVisible;
     frame.panel.setPreferredWidth(settings.panelWidth);
     g_frame = &frame;
-    const bool placed = settings.window.right > settings.window.left;
     HWND hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, cls.lpszClassName, L"Visor STP", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                placed ? settings.window.left : CW_USEDEFAULT, placed ? settings.window.top : CW_USEDEFAULT,
-                                placed ? settings.window.right - settings.window.left : 1280,
-                                placed ? settings.window.bottom - settings.window.top : 820, nullptr, nullptr, instance,
-                                nullptr);
+                                CW_USEDEFAULT, CW_USEDEFAULT, 1280, 820, nullptr, nullptr, instance, nullptr);
+    if (hwnd && settings.window.right > settings.window.left) {
+        // Se guardo con GetWindowPlacement (coordenadas del area de trabajo): se
+        // restaura igual, sin que la ventana se corra si la barra de tareas esta arriba.
+        WINDOWPLACEMENT placement = {};
+        placement.length = sizeof(placement);
+        GetWindowPlacement(hwnd, &placement);
+        placement.rcNormalPosition = settings.window;
+        placement.showCmd = SW_HIDE;
+        SetWindowPlacement(hwnd, &placement);
+    }
     if (!hwnd) return 1;
     frame.hwnd = hwnd;
     frame.dpi = windowDpi(hwnd);
@@ -931,6 +951,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     RECT client;
     GetClientRect(hwnd, &client);
     if (!frame.view.create(instance, hwnd, client)) return 1;
+    frame.view.setDpi(frame.dpi);  // la del monitor de la ventana, no la del sistema
     frame.panel.create(instance, hwnd);
     frame.panel.setDpi(frame.dpi);
     frame.panel.attach(&frame.view);

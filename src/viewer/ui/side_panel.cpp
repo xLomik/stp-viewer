@@ -108,10 +108,11 @@ bool SidePanel::create(HINSTANCE instance, HWND parent) {
 
 void SidePanel::setDpi(int dpi) {
     m_dpi = dpi;
-    if (m_editFont) DeleteObject(m_editFont);
+    HFONT old = m_editFont;
     m_editFont = CreateFontW(-scaled(13), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (m_edit) SendMessageW(m_edit, WM_SETFONT, reinterpret_cast<WPARAM>(m_editFont), TRUE);
+    if (old) DeleteObject(old);  // despues: el EDIT ya usa la nueva
     refresh();
 }
 
@@ -451,6 +452,11 @@ LRESULT SidePanel::handle(UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             MarkupTools* tools = m_view ? m_view->tools() : nullptr;
             if (!tools) return 0;
+            // El texto de la nota en edicion se confirma en esa nota antes de elegir otra.
+            if (m_edit && GetFocus() == m_edit) {
+                commitNote();
+                if (m_view) m_view->focus();
+            }
             const RECT list = listRect();
             if (y >= list.top && y < list.bottom) {
                 const int index = (y - list.top + m_scroll) / rowHeight();

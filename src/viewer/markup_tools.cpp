@@ -220,7 +220,9 @@ SnapResult MarkupTools::snapAt(int x, int y) {
     // La restriccion se aplica al punto ya enganchado (segundo clic de distancia y angulo).
     // Si el punto ya la cumple conserva su tipo: la ranura con Orto sigue siendo "Cuadrante".
     m_constrained = ConstrainedPoint();
-    if (snap.kind != SnapKind::None && second) {
+    // En Angulo un clic sobre una arista elige la segunda recta: no se restringe.
+    const bool linePick = m_tool == Tool::Angle && snap.kind == SnapKind::OnEdge;
+    if (snap.kind != SnapKind::None && second && !linePick) {
         m_constrained = applyConstraint(from, snap.point, m_snap.constraint, camera, options.plane);
         if (m_constrained.applied && distance(m_constrained.point, snap.point) > 1e-9 * std::max(1.0, mesh.bounds.diagonal())) {
             snap.point = m_constrained.point;
