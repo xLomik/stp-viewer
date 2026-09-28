@@ -11,6 +11,7 @@ set "THUMB_IID={E357FCCD-A995-4576-B01F-234630154E96}"
 set "PREVIEW_IID={8895B1C6-B41F-4C1C-A562-0D564250836F}"
 
 echo Cerrando el Explorador y el anfitrion de vista previa...
+taskkill /f /fi "MODULES eq StepShellExt.dll" >nul 2>&1
 taskkill /f /im prevhost.exe >nul 2>&1
 taskkill /f /im explorer.exe >nul 2>&1
 

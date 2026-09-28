@@ -188,14 +188,33 @@ causas habituales, en orden:
    un tipo de archivo para `.stp`, ese tipo manda sobre la extension. El
    instalador tambien escribe ahi, pero si instalaste el CAD *despues*, vuelve a
    ejecutar `instalar.bat`.
-4. **El Explorador tiene la DLL vieja en memoria.** `taskkill /f /im
-   prevhost.exe` y cierra y abre el Explorador.
+4. **El Explorador tiene la DLL vieja en memoria.** Una vez cargada, la DLL
+   queda fija en `prevhost.exe` y `dllhost.exe` hasta que se cierran;
+   `instalar.bat` los cierra solo. A mano:
+   `taskkill /f /fi "MODULES eq StepShellExt.dll"` y reinicia el Explorador.
 5. **Archivo en OneDrive sin descargar**, o en una unidad de red lenta.
 
 Para las miniaturas, ademas: Opciones del Explorador > Ver > desmarca "Mostrar
 siempre iconos, nunca miniaturas", y borra la cache
 (`%LOCALAPPDATA%\Microsoft\Windows\Explorer\thumbcache_*.db`), cosa que
 `instalar.bat` ya hace.
+
+## Si el Explorador se cuelga o se reinicia
+
+Hasta la version del 28/09/2026 el panel de vista previa quedaba registrado con
+el anfitrion **de 32 bits** de Windows (`prevhost.exe` de WOW64), pero la DLL es
+de 64 bits: no cargaba, el Explorador se quedaba esperando al panel (la carpeta
+sin miniaturas, el diseno de iconos en gris) y a veces se reiniciaba. Ademas, si
+Windows descargaba la DLL mientras el panel todavia leia un archivo, el
+anfitrion se caia. Las dos cosas estan corregidas; para aplicarlas:
+
+1. Ejecuta `instalar.bat` de esta version (reescribe el registro y cierra los
+   procesos con la DLL vieja).
+2. Si la carpeta sigue sin dejar elegir el diseno, ejecuta
+   `reparar_explorador.bat` y acepta restablecer las vistas de carpeta.
+3. Si vuelve a pasar, ejecuta `diagnostico.bat`: revisa el anfitrion del panel
+   y guarda en `diagnostico.txt` las caidas y cuelgues que Windows registro,
+   con el modulo que fallo.
 
 ## Uso del visor y del panel
 

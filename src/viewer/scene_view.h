@@ -12,7 +12,6 @@
 #include "../formats/formats.h"
 #include "../render/renderer.h"
 #include "markup_tools.h"
-#include "ui/tooltip.h"
 #include "ui/view_cube.h"
 
 namespace stp {
@@ -216,7 +215,6 @@ private:
     void drawMiniBar(HDC dc);
     bool miniBarMessage(UINT msg, LPARAM lparam);
     int m_barHot = -1;
-    ui::Tooltip m_barTip;
     bool m_orbiting = false;
     bool m_panning = false;
     POINT m_lastMouse = {};

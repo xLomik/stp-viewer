@@ -20,6 +20,11 @@ if not exist "%DLL%" (
     exit /b 1
 )
 
+rem Una version anterior puede seguir cargada en los anfitriones de miniaturas y
+rem del panel (dllhost.exe, prevhost.exe): se cierran para que carguen la nueva.
+taskkill /f /fi "MODULES eq StepShellExt.dll" >nul 2>&1
+taskkill /f /im prevhost.exe >nul 2>&1
+
 echo Registrando miniaturas y panel de vista previa para este usuario...
 regsvr32 /s "%DLL%"
 if errorlevel 1 (

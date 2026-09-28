@@ -29,6 +29,7 @@ g++ %FLAGS% -o dist\steprender.exe %ENGINE% src\tools\steprender.cpp %STATIC%
 copy /y install\instalar.bat dist\ >nul
 copy /y install\desinstalar.bat dist\ >nul
 copy /y install\diagnostico.bat dist\ >nul
+copy /y install\reparar_explorador.bat dist\ >nul
 
 echo.
 echo Compilado en dist\

@@ -1,7 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
-rem Revisa por que el panel de vista previa o las miniaturas no aparecen.
-rem No cambia nada: solo informa.
+rem Revisa por que el panel de vista previa o las miniaturas no aparecen, o por
+rem que el Explorador se cuelga. No cambia nada: solo informa. Las caidas que
+rem Windows registro se guardan en diagnostico.txt, junto a este script.
 
 set "DIR=%~dp0"
 set "DLL=%DIR%StepShellExt.dll"
@@ -9,6 +10,8 @@ set "THUMB_CLSID={90D4532D-A5D0-49A7-B115-800AD0042693}"
 set "PREVIEW_CLSID={B718893F-E5EC-4CD8-BF74-D02BC81308C3}"
 set "THUMB_IID={E357FCCD-A995-4576-B01F-234630154E96}"
 set "PREVIEW_IID={8895B1C6-B41F-4C1C-A562-0D564250836F}"
+set "PREVHOST64={6d2b5079-2f0b-48dd-ab7f-97cec514d30b}"
+set "PREVHOST32={534A1E02-D58F-44f0-B58B-36CBED287C7C}"
 set "PROBLEMAS=0"
 
 echo ============================================================
@@ -43,6 +46,22 @@ for %%C in ("%THUMB_CLSID%" "%PREVIEW_CLSID%") do (
 )
 echo.
 
+echo [2b] Anfitrion del panel de vista previa ^(prevhost^)
+set "APPID="
+for /f "tokens=2,*" %%A in ('reg query "HKCU\Software\Classes\CLSID\%PREVIEW_CLSID%" /v AppID 2^>nul ^| findstr REG_SZ') do set "APPID=%%B"
+if not defined APPID (
+    echo     MAL  el panel no tiene anfitrion asignado   ^(ejecuta instalar.bat^)
+    set /a PROBLEMAS+=1
+) else if /i "!APPID!"=="%PREVHOST64%" (
+    echo     OK   prevhost de 64 bits
+) else (
+    echo     MAL  el panel apunta al prevhost de 32 bits: la DLL es de 64 bits y no
+    echo          carga ahi. El Explorador se queda esperando al panel, se cuelga
+    echo          y a veces se reinicia. Arreglo: ejecuta instalar.bat de esta version.
+    set /a PROBLEMAS+=1
+)
+echo.
+
 echo [3] Lista PreviewHandlers de la maquina ^(necesita administrador^)
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PreviewHandlers" /v "%PREVIEW_CLSID%" >nul 2>&1
 if errorlevel 1 (
@@ -61,6 +80,7 @@ echo.
 echo [4] Asociacion por extension
 call :revisar_extension .stp
 call :revisar_extension .step
+call :revisar_extension .dxf
 echo.
 
 echo [5] Ajustes del Explorador
@@ -80,7 +100,13 @@ if not errorlevel 1 (
 )
 echo.
 
-echo [6] Prueba directa del motor
+echo [6] Caidas y cuelgues de los ultimos 14 dias ^(explorer, prevhost, dllhost^)
+set "REPORTE=%DIR%diagnostico.txt"
+powershell -NoProfile -Command "$e = Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001,1002; StartTime=(Get-Date).AddDays(-14)} -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'explorer\.exe|prevhost\.exe|dllhost\.exe|StepShellExt' } | Select-Object -First 25; if ($e) { $e | Format-List TimeCreated, Id, Message | Out-File -Encoding utf8 '%REPORTE%'; $n = @($e).Count; $ours = @($e | Where-Object { $_.Message -match 'StepShellExt' }).Count; Write-Host ('    --   ' + $n + ' eventos guardados en diagnostico.txt; ' + $ours + ' nombran a StepShellExt.dll') } else { Write-Host '    OK   Windows no registro caidas del Explorador ni de sus anfitriones' }"
+echo          Si hay eventos, envia diagnostico.txt: dice que modulo fallo.
+echo.
+
+echo [7] Prueba directa del motor
 if exist "%DIR%stpviewer.exe" (
     echo     --   si el visor abre el archivo pero el panel no lo muestra,
     echo          el problema es de registro, no del archivo.

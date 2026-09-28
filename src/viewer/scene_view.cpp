@@ -167,12 +167,10 @@ bool SceneView::create(HINSTANCE instance, HWND parent, const RECT& rect) {
     }
     m_camera.ortho = true;
     updateStyle();
-    m_barTip.create(instance, m_hwnd);
     return true;
 }
 
 void SceneView::destroy() {
-    m_barTip.destroy();
     if (m_image) {
         DeleteObject(m_image);
         m_image = nullptr;
@@ -352,7 +350,6 @@ bool SceneView::miniBarMessage(UINT msg, LPARAM lparam) {
     if (msg == WM_MOUSELEAVE) {
         if (m_barHot >= 0) {
             m_barHot = -1;
-            m_barTip.hide();
             invalidate();
         }
         return false;
@@ -366,19 +363,9 @@ bool SceneView::miniBarMessage(UINT msg, LPARAM lparam) {
     }
     if (hot != m_barHot) {
         m_barHot = hot;
-        m_barTip.hide();
-        if (hot >= 0) {
-            static const int commands[7] = {ui::kCmdNavigate, ui::kCmdTool + 1, ui::kCmdTool + 2, ui::kCmdTool + 3,
-                                            ui::kCmdTool + 4, ui::kCmdSnapToggle, ui::kCmdOrtho};
-            if (!m_barTip.visible() && IsWindow(m_hwnd)) {
-                if (const ui::CommandInfo* info = ui::commandInfo(commands[hot])) {
-                    const RECT r = miniBarLayout()[static_cast<std::size_t>(hot)].rect;
-                    POINT anchor = {r.left, r.bottom + scaled(8)};
-                    ClientToScreen(m_hwnd, &anchor);
-                    m_barTip.show(*info, anchor, m_dpi);
-                }
-            }
-        }
+        // Sin ventana emergente: en el panel la vista es hija de una ventana del
+        // Explorador (otro proceso) y un popup con ese dueno ata los dos procesos.
+        // El nombre del boton va en la linea de ayuda de abajo.
         invalidate();
     }
     if (hot < 0) return false;
@@ -614,12 +601,14 @@ void SceneView::pickQuality(bool interactive, int* supersample, double* scale) c
     *supersample = 1;
     *scale = 1.0;
     if (m_msPerSample <= 0.0) {
-        // Primer cuadro: sin medida todavia, se arranca prudente.
-        *supersample = interactive ? 1 : 2;
+        // Primer cuadro: sin medida todavia, se arranca prudente. En el panel del
+        // Explorador la ventana es hija de la del Explorador y comparten la cola de
+        // entrada: mientras se dibuja, el Explorador no responde.
+        *supersample = interactive || m_compact ? 1 : 2;
         return;
     }
 
-    const double budgetMs = interactive ? 22.0 : 300.0;
+    const double budgetMs = interactive ? 22.0 : (m_compact ? 120.0 : 300.0);
     const double pixels = static_cast<double>(m_width) * m_height;
     struct Option {
         double scale;
@@ -783,6 +772,15 @@ void SceneView::drawOverlay(HDC dc) {
         if (m_tools && !m_tools->statusText().empty()) {
             hint = m_tools->statusText();
             SetTextColor(dc, m_textColor);
+        }
+        if (m_barHot >= 0 && miniBarVisible()) {
+            static const int commands[7] = {ui::kCmdNavigate, ui::kCmdTool + 1, ui::kCmdTool + 2, ui::kCmdTool + 3,
+                                            ui::kCmdTool + 4, ui::kCmdSnapToggle, ui::kCmdOrtho};
+            if (const ui::CommandInfo* info = ui::commandInfo(commands[m_barHot])) {
+                hint = std::wstring(info->label) + (info->shortcut ? std::wstring(L" (") + info->shortcut + L")" : L"") +
+                       L"   " + info->help;
+                SetTextColor(dc, m_textColor);
+            }
         }
         DrawTextW(dc, hint.c_str(), -1, &help, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (!m_plan2d) drawTriad(dc);

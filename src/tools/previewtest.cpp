@@ -2,6 +2,12 @@
 // poder probarlo sin registrar nada en el sistema.
 //
 //     previewtest StepShellExt.dll pieza.stp
+//     previewtest StepShellExt.dll pieza.stp --descargar
+//
+// --descargar imita lo que hacen prevhost.exe y dllhost.exe cada cierto tiempo
+// (CoFreeUnusedLibraries): cierra la vista mientras el archivo todavia carga,
+// pregunta DllCanUnloadNow y, si la DLL dice que si, la descarga. Si la DLL deja
+// trabajo vivo y se deja descargar, el proceso se cae.
 #include <windows.h>
 #include <objbase.h>
 #include <shlwapi.h>
@@ -22,6 +28,7 @@ const IID kIID_IInitializeWithStream = {
     0xB824B49D, 0x22AC, 0x4161, {0xAC, 0x8A, 0x99, 0x16, 0xE8, 0xFA, 0x3F, 0x7F}};
 
 typedef HRESULT(STDAPICALLTYPE* GetClassObjectFn)(REFCLSID, REFIID, void**);
+typedef HRESULT(STDAPICALLTYPE* CanUnloadNowFn)();
 
 IPreviewHandler* g_handler = nullptr;
 
@@ -143,6 +150,34 @@ int main(int argc, char** argv) {
     std::printf("DoPreview 0x%08lX\n", static_cast<unsigned long>(hr));
     if (FAILED(hr)) return 1;
     g_handler->SetFocus();
+
+    if (argc >= 4 && std::string(argv[3]) == "--descargar") {
+        Sleep(50);  // la carga ya arranco en segundo plano
+        g_handler->Unload();
+        g_handler->Release();
+        g_handler = nullptr;
+        auto canUnload = reinterpret_cast<CanUnloadNowFn>(
+            reinterpret_cast<void*>(GetProcAddress(dll, "DllCanUnloadNow")));
+        const HRESULT can = canUnload ? canUnload() : S_FALSE;
+        std::printf("DllCanUnloadNow 0x%08lX\n", static_cast<unsigned long>(can));
+        wchar_t dllPath[MAX_PATH] = {};
+        GetModuleFileNameW(dll, dllPath, MAX_PATH);
+        if (can == S_OK) FreeLibrary(dll);
+        // Con la carga todavia en marcha la DLL no puede salir de memoria.
+        std::printf(GetModuleHandleW(dllPath) ? "DLL sigue en memoria\n" : "DLL fuera de memoria\n");
+        std::fflush(stdout);
+        // Tiempo para que termine cualquier hilo que la DLL haya dejado vivo.
+        const DWORD until = GetTickCount() + 8000;
+        MSG pending;
+        while (GetTickCount() < until) {
+            while (PeekMessageW(&pending, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&pending);
+            Sleep(20);
+        }
+        std::printf("sobrevivio\n");
+        DestroyWindow(host);
+        CoUninitialize();
+        return 0;
+    }
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

@@ -11,13 +11,24 @@ HMODULE g_shellExtModule = nullptr;
 
 namespace {
 
-long g_lockCount = 0;
+long g_lockCount = 0;  // IClassFactory::LockServer (la DLL nunca se descarga igual)
 
 // Interfaces de shell que mandan sobre cada asociacion.
 const wchar_t* kThumbnailProviderIid = L"{E357FCCD-A995-4576-B01F-234630154E96}";
 const wchar_t* kPreviewHandlerIid = L"{8895B1C6-B41F-4C1C-A562-0D564250836F}";
-// Sustituto estandar de Windows que hospeda los manejadores de vista previa.
-const wchar_t* kPrevHostAppId = L"{534A1E02-D58F-44f0-B58B-36CBED287C7C}";
+// Sustitutos de Windows que hospedan los manejadores de vista previa. Tiene que
+// ser el de la misma arquitectura que la DLL: con el de 32 bits, una DLL de 64
+// bits no carga, el Explorador se queda esperando al panel y se cuelga.
+const wchar_t* prevHostAppId() {
+    const wchar_t* native = L"{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}";
+#ifdef _WIN64
+    return native;
+#else
+    BOOL wow64 = FALSE;
+    IsWow64Process(GetCurrentProcess(), &wow64);
+    return wow64 ? L"{534A1E02-D58F-44f0-B58B-36CBED287C7C}" : native;  // 32 bits en Windows de 64
+#endif
+}
 
 const wchar_t* kThumbnailClsid = L"{90D4532D-A5D0-49A7-B115-800AD0042693}";
 const wchar_t* kPreviewClsid = L"{B718893F-E5EC-4CD8-BF74-D02BC81308C3}";
@@ -115,6 +126,34 @@ std::vector<std::wstring> progIdsFor(const wchar_t* ext) {
     return ids;
 }
 
+constexpr wchar_t kPerceivedMarker[] = L"stp-viewer.PerceivedType";
+
+bool hasValue(HKEY root, const std::wstring& subkey, const wchar_t* name) {
+    return RegGetValueW(root, subkey.c_str(), name, RRF_RT_ANY, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
+}
+
+void deleteValue(HKEY root, const std::wstring& subkey, const wchar_t* name) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, subkey.c_str(), 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS) {
+        RegDeleteValueW(key, name);
+        RegCloseKey(key);
+    }
+}
+
+void fixPerceivedType(HKEY root, const wchar_t* ext) {
+    const std::wstring key = classesRoot() + ext;
+    // Versiones anteriores escribian "document" sin marca encima del valor de la
+    // maquina: se quita para que vuelva a mandar el del sistema.
+    if (root == HKEY_CURRENT_USER && !hasValue(root, key, kPerceivedMarker) &&
+        readString(root, key, L"PerceivedType") == L"document" &&
+        hasValue(HKEY_LOCAL_MACHINE, key, L"PerceivedType")) {
+        deleteValue(root, key, L"PerceivedType");
+    }
+    if (!readString(HKEY_CLASSES_ROOT, ext, L"PerceivedType").empty() && !hasValue(root, key, kPerceivedMarker)) return;
+    setValue(root, key, L"PerceivedType", L"document");
+    setValue(root, key, kPerceivedMarker, L"1");
+}
+
 }  // namespace
 
 STDAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void** ppv) {
@@ -125,6 +164,15 @@ STDAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void** ppv) {
     if (clsid == CLSID_StepPreviewHandler) preview = true;
     else if (clsid != CLSID_StepThumbnailProvider) return CLASS_E_CLASSNOTAVAILABLE;
 
+    // La vista del panel carga en un hilo propio que puede seguir vivo despues de
+    // Unload. prevhost.exe y dllhost.exe descargan cada tanto las DLL que dicen
+    // "se puede descargar" (CoFreeUnusedLibraries): si eso pasa con el hilo en
+    // marcha, el proceso se cae y el Explorador se queda colgado esperando al panel.
+    // Una vez en uso, la DLL queda fija en memoria hasta que el proceso termine.
+    HMODULE pinned = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                       reinterpret_cast<LPCWSTR>(&DllGetClassObject), &pinned);
+
     ClassFactory* factory = new (std::nothrow) ClassFactory(preview);
     if (!factory) return E_OUTOFMEMORY;
     const HRESULT hr = factory->QueryInterface(riid, ppv);
@@ -132,9 +180,9 @@ STDAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void** ppv) {
     return hr;
 }
 
-STDAPI DllCanUnloadNow() {
-    return (g_dllRefCount == 0 && g_lockCount == 0) ? S_OK : S_FALSE;
-}
+// La DLL queda fija en memoria al crear el primer objeto (ver DllGetClassObject):
+// descargarla con la vista cargando en segundo plano tumbaria el proceso.
+STDAPI DllCanUnloadNow() { return S_FALSE; }
 
 HRESULT RegisterShellExtensions(HMODULE module, bool perUser) {
     wchar_t path[MAX_PATH] = {};
@@ -160,7 +208,7 @@ HRESULT RegisterShellExtensions(HMODULE module, bool perUser) {
         setValue(root, clsidKey + L"\\InprocServer32", L"ThreadingModel", L"Apartment");
         if (server.surrogate) {
             // El panel de vista previa corre fuera del Explorador, en prevhost.exe.
-            setValue(root, clsidKey, L"AppID", kPrevHostAppId);
+            setValue(root, clsidKey, L"AppID", prevHostAppId());
             setValue(root, clsidKey, L"DisplayName", server.name);
         }
     }
@@ -178,8 +226,9 @@ HRESULT RegisterShellExtensions(HMODULE module, bool perUser) {
                            kPreviewHandlerIid,
                  nullptr, kPreviewClsid);
         // Sin PerceivedType el panel no ofrece vista previa para extensiones
-        // que ningun programa reclama.
-        setValue(root, base + ext, L"PerceivedType", L"document");
+        // que ningun programa reclama. Solo se pone si falta: pisar el del sistema
+        // cambia como el Explorador clasifica las carpetas con esos archivos.
+        fixPerceivedType(root, ext);
 
         for (const std::wstring& progId : progIdsFor(ext)) {
             setValue(root, base + progId + L"\\ShellEx\\" + kThumbnailProviderIid, nullptr,
@@ -213,6 +262,10 @@ HRESULT UnregisterShellExtensions(bool perUser) {
     RegDeleteTreeW(root, (base + L"CLSID\\" + kPreviewClsid).c_str());
 
     for (const wchar_t* ext : kExtensions) {
+        if (hasValue(root, base + ext, kPerceivedMarker)) {
+            deleteValue(root, base + ext, L"PerceivedType");
+            deleteValue(root, base + ext, kPerceivedMarker);
+        }
         RegDeleteTreeW(root, (base + ext + L"\\ShellEx\\" + kThumbnailProviderIid).c_str());
         RegDeleteTreeW(root, (base + ext + L"\\ShellEx\\" + kPreviewHandlerIid).c_str());
         RegDeleteTreeW(root, (base + L"SystemFileAssociations\\" + ext + L"\\ShellEx\\" +
