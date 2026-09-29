@@ -2,6 +2,7 @@
 // Explorador de Windows y guarda el resultado como BMP.
 //
 //     thumbtest StepThumbnail.dll pieza.stp salida.bmp 256
+//     thumbtest StepThumbnail.dll --lote 256 a.dxf b.dxf ...   (mide cada miniatura)
 #include <windows.h>
 #include <objbase.h>
 #include <shlwapi.h>
@@ -82,6 +83,41 @@ bool saveBitmap(HBITMAP bitmap, const char* path) {
     return true;
 }
 
+// Pide la miniatura de cada archivo como el Explorador (objeto nuevo por archivo) y
+// mide cuanto tarda, para comparar versiones.
+int batch(IClassFactory* factory, UINT size, int count, char** files) {
+    LARGE_INTEGER frequency, start, stop;
+    QueryPerformanceFrequency(&frequency);
+    double total = 0, worst = 0;
+    int ok = 0;
+    for (int i = 0; i < count; ++i) {
+        QueryPerformanceCounter(&start);
+        IInitializeWithStream* init = nullptr;
+        IThumbnailProvider* provider = nullptr;
+        IStream* stream = nullptr;
+        HBITMAP bitmap = nullptr;
+        WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
+        HRESULT hr = factory->CreateInstance(nullptr, kIID_IInitializeWithStream, reinterpret_cast<void**>(&init));
+        if (SUCCEEDED(hr)) hr = SHCreateStreamOnFileW(widen(files[i]).c_str(), STGM_READ, &stream);
+        if (SUCCEEDED(hr)) hr = init->Initialize(stream, STGM_READ);
+        if (SUCCEEDED(hr)) hr = init->QueryInterface(kIID_IThumbnailProvider, reinterpret_cast<void**>(&provider));
+        if (SUCCEEDED(hr)) hr = provider->GetThumbnail(size, &bitmap, &alpha);
+        QueryPerformanceCounter(&stop);
+        if (bitmap) DeleteObject(bitmap);
+        if (provider) provider->Release();
+        if (stream) stream->Release();
+        if (init) init->Release();
+        const double ms = 1000.0 * (stop.QuadPart - start.QuadPart) / frequency.QuadPart;
+        total += ms;
+        worst = ms > worst ? ms : worst;
+        ok += SUCCEEDED(hr) ? 1 : 0;
+        if (count <= 12) std::printf("%-40s %8.2f ms  0x%08lX\n", files[i], ms, static_cast<unsigned long>(hr));
+    }
+    std::printf("%d archivos (%d bien): total %.1f ms, %.2f ms por archivo, peor %.1f ms\n", count, ok, total,
+                count ? total / count : 0.0, worst);
+    return ok == count ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -111,6 +147,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (std::string(argv[2]) == "--lote") {
+        const int code = batch(factory, static_cast<UINT>(std::atoi(argv[3])), argc - 4, argv + 4);
+        factory->Release();
+        return code;
+    }
     IInitializeWithStream* init = nullptr;
     hr = factory->CreateInstance(nullptr, kIID_IInitializeWithStream,
                                  reinterpret_cast<void**>(&init));
