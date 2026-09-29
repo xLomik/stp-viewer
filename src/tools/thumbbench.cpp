@@ -1,7 +1,6 @@
 // Mide la ruta de la miniatura sin Windows: leer, cargar, detectar plano y dibujar.
 //     thumbbench [tamano] archivo...
 // Imprime el tiempo de cada fase por archivo y el total, para comparar cambios.
-#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -52,12 +51,8 @@ int main(int argc, char** argv) {
         if (ok && !mesh.empty()) {
             stp::Camera camera;
             stp::RenderStyle style;
-            style.supersample = size >= 256 ? 2 : 3;
-            if (const char* ss = std::getenv("SS")) style.supersample = std::atoi(ss);
-            if (const char* cap = std::getenv("CAP")) {
-                style.supersample = std::max(1, std::min(style.supersample, std::atoi(cap) / size));
-            }
-            if (const char* th = std::getenv("THREADS")) style.threads = std::atoi(th);
+            style.supersample = stp::thumbnailSupersample(size);  // igual que la DLL
+            style.threads = 1;
             if (planar.planar) camera.fitPlanar(planar, 1.0, 1.06);
             else camera.fit(mesh.bounds, 1.0);
             stp::Framebuffer frame;

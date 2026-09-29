@@ -69,6 +69,11 @@ struct Framebuffer {
 void renderMesh(const Mesh& mesh, const Camera& camera, const RenderStyle& style, int width,
                 int height, Framebuffer* out);
 
+// Supermuestreo para una miniatura de size px: el raster interno no pasa de 1024 px
+// por lado (en tamanos grandes el propio tamano ya da el detalle y el Explorador
+// achica la imagen al mostrarla).
+int thumbnailSupersample(int size);
+
 // Projects a world point to pixel coordinates of a width x height viewport.
 // Returns false when the point is behind the camera.
 bool projectPoint(const Camera& camera, int width, int height, const Vec3& world, double* sx,

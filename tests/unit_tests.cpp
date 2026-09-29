@@ -1897,6 +1897,19 @@ TEST(recent_files_dedupe_case_insensitive) {
     CHECK(stp::ui::samePath(L"C:\\A\\b.dxf", L"c:/a/B.DXF"));
 }
 
+// --- Miniaturas ---------------------------------------------------------------------
+
+TEST(thumbnail_supersample_caps_raster) {
+    CHECK(stp::thumbnailSupersample(16) == 3);
+    CHECK(stp::thumbnailSupersample(96) == 3);
+    CHECK(stp::thumbnailSupersample(256) == 2);
+    CHECK(stp::thumbnailSupersample(512) == 2);
+    CHECK(stp::thumbnailSupersample(768) == 1);
+    CHECK(stp::thumbnailSupersample(1024) == 1);
+    CHECK(stp::thumbnailSupersample(2560) == 1);
+    for (int size = 16; size <= 1024; size += 8) CHECK(size * stp::thumbnailSupersample(size) <= std::max(1024, size));
+}
+
 int main() {
     int failedTests = 0;
     for (const TestCase& test : registry()) {

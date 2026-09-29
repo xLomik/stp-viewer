@@ -512,6 +512,11 @@ bool projectPoint(const Camera& camera, int width, int height, const Vec3& world
     return true;
 }
 
+int thumbnailSupersample(int size) {
+    const int most = size >= 256 ? 2 : 3;
+    return std::max(1, std::min(most, 1024 / std::max(1, size)));
+}
+
 void renderMesh(const Mesh& mesh, const Camera& camera, const RenderStyle& style, int width,
                 int height, Framebuffer* out) {
     const int ss = std::max(1, std::min(4, style.supersample));

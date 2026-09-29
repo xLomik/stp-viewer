@@ -152,7 +152,10 @@ HRESULT RenderStepThumbnail(const char* data, size_t length, UINT size, HBITMAP*
     stp::Camera camera;
     camera.ortho = true;
     stp::RenderStyle style;
-    style.supersample = size >= 256 ? 2 : 3;
+    style.supersample = stp::thumbnailSupersample(static_cast<int>(size));
+    // El Explorador pide varias miniaturas a la vez: un hilo por miniatura rinde
+    // igual y no las pone a competir entre si.
+    style.threads = 1;
 
     const stp::PlanarInfo planar = stp::detectPlanar(mesh);
     if (planar.planar) {
