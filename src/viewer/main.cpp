@@ -16,6 +16,7 @@
 #include "export.h"
 #include "scene_view.h"
 #include "settings.h"
+#include "thumbnail_warmup_win.h"
 #include "ui/commands.h"
 #include "ui/popup_menu.h"
 #include "ui/ribbon.h"
@@ -94,6 +95,7 @@ struct Frame {
     bool statusVisible = true;
     bool panelVisible = true;
     bool panelFloatOpen = false;  // ventana angosta: panel flotante abierto con F2
+    stp::ThumbnailWarmup warmup;  // miniaturas de la carpeta del archivo abierto
     bool lastLoading = false;
     bool lastModel = false;
     bool cubeVisible = true;
@@ -221,7 +223,7 @@ CommandState Frame::state(int command) const {
             break;
         case kCmdPolarMenu:
             s.label = L"Paso " + std::to_wstring(tools ? static_cast<int>(tools->snapSettings().constraint.polarStepDegrees) : 45) +
-                      L"°";
+                      L"\u00b0";
             break;
         case kCmdColorMenu:
         case kCmdColor:
@@ -295,7 +297,7 @@ void Frame::execute(int command) {
         if (index < recent.items().size()) {
             const std::wstring path = recent.items()[index];
             if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-                const std::wstring question = L"No se encuentra\n" + path + L"\n\n¿Quitarlo de la lista de recientes?";
+                const std::wstring question = L"No se encuentra\n" + path + L"\n\n\u00bfQuitarlo de la lista de recientes?";
                 if (MessageBoxW(hwnd, question.c_str(), L"Visor STP", MB_YESNO | MB_ICONQUESTION) == IDYES) {
                     recent.remove(path);
                     start.setRecent(recent.items());
@@ -335,8 +337,8 @@ void Frame::execute(int command) {
             case kCmdAbout:
                 MessageBoxW(hwnd,
                             L"Visor STP\n\nModelos STEP, IGES, STL, OBJ, PLY y planos DXF.\n"
-                            L"Medidas con enganche a objetos (OSNAP), Orto y Polar, marcas de revisión "
-                            L"y exportación a PDF y PNG.",
+                            L"Medidas con enganche a objetos (OSNAP), Orto y Polar, marcas de revisi\u00f3n "
+                            L"y exportaci\u00f3n a PDF y PNG.",
                             L"Acerca de Visor STP", MB_OK | MB_ICONINFORMATION);
                 break;
             case kCmdNavigate:
@@ -451,7 +453,7 @@ void Frame::refreshStatus() {
     } else {
         s.message = view.statusText();
         if (view.truncated() && (!tools || tools->tool() == stp::Tool::Navigate)) {
-            s.message = L"Modelo muy grande: se muestra solo una parte   ·   " + s.message;
+            s.message = L"Modelo muy grande: se muestra solo una parte   \u00b7   " + s.message;
         }
     }
     status.setState(s);
@@ -461,7 +463,7 @@ void Frame::updateTitle() {
     std::wstring title = L"Visor STP";
     if (!g_currentFile.empty()) {
         const bool dirty = view.tools() && view.tools()->dirty();
-        title = fileNameOf(g_currentFile) + (dirty ? L" *" : L"") + L" — Visor STP";
+        title = fileNameOf(g_currentFile) + (dirty ? L" *" : L"") + L" \u2014 Visor STP";
     }
     wchar_t current[512] = {};
     GetWindowTextW(hwnd, current, 512);
@@ -551,7 +553,7 @@ void Frame::openFile(const std::wstring& given) {
     panel.commitEdit();
     std::wstring problem;
     if (!view.saveMarks(&problem)) {
-        const std::wstring question = problem + L"\n\nSi abres otro archivo, esas marcas se pierden. ¿Abrir de todos modos?";
+        const std::wstring question = problem + L"\n\nSi abres otro archivo, esas marcas se pierden. \u00bfAbrir de todos modos?";
         if (MessageBoxW(hwnd, question.c_str(), L"Visor STP", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     }
     g_currentFile = path;
@@ -559,6 +561,17 @@ void Frame::openFile(const std::wstring& given) {
     start.setRecent(recent.items());
     saveAll();  // los recientes quedan guardados aunque el visor se cierre mal
     view.loadFile(path);
+    // En segundo plano, las miniaturas del resto de la carpeta quedan en la cache de
+    // Windows: la proxima vez el Explorador las muestra al instante. Solo en discos
+    // locales: en red o en un pendrive seria leer todos los archivos por nada.
+    const std::size_t slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos && path.size() > 2 && path[1] == L':') {
+        const std::wstring folder = path.substr(0, slash);
+        const std::wstring root = path.substr(0, 3);
+        if (GetDriveTypeW(root.c_str()) == DRIVE_FIXED && _wcsicmp(folder.c_str(), warmup.folder().c_str()) != 0) {
+            warmup.start(folder, 256 * dpi / 96);
+        }
+    }
     layout();
     view.focus();
     panel.refresh();
@@ -856,10 +869,13 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (f) f->panel.commitEdit();
             std::wstring problem;
             if (f && !f->view.saveMarks(&problem)) {
-                const std::wstring question = problem + L"\n\n¿Cerrar de todos modos?";
+                const std::wstring question = problem + L"\n\n\u00bfCerrar de todos modos?";
                 if (MessageBoxW(hwnd, question.c_str(), L"Visor STP", MB_YESNO | MB_ICONWARNING) != IDYES) return 0;
             }
-            if (f) f->saveAll();
+            if (f) {
+                f->saveAll();
+                f->warmup.cancel();  // los hilos de miniaturas terminan antes de cerrar
+            }
             DestroyWindow(hwnd);
             return 0;
         }
@@ -901,6 +917,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int showC
     cls.hbrBackground = CreateSolidBrush(gdi(kBackground));
     cls.lpszClassName = L"StpViewerFrame";
     if (!RegisterClassExW(&cls)) return 1;
+
+    {
+        // "Preparar miniaturas CAD" del menu contextual de carpetas.
+        const wchar_t* line = commandLine;
+        while (line && (*line == L' ' || *line == L'\t')) ++line;
+        int count = 0;
+        LPWSTR* args = line && *line ? CommandLineToArgvW(line, &count) : nullptr;
+        if (args && count >= 2 && _wcsicmp(args[0], L"--miniaturas") == 0) {
+            std::wstring folder = args[1];
+            // "C:\" entre comillas llega como C:" (la barra escapa la comilla).
+            if (!folder.empty() && folder.back() == L'"') folder.back() = L'\\';
+            LocalFree(args);
+            CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+            const int code = stp::runThumbnailWarmupWindow(instance, folder);
+            CoUninitialize();
+            return code;
+        }
+        if (args) LocalFree(args);
+    }
 
     const stp::ViewerSettings settings = stp::loadSettings();
     Frame frame;

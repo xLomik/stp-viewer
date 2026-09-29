@@ -52,6 +52,13 @@ if exist "%EXE%" (
     reg add "HKCU\Software\Classes\Applications\stpviewer.exe" /v FriendlyAppName /d "stp-viewer" /f >nul
     reg add "HKCU\Software\Classes\Applications\stpviewer.exe\SupportedTypes" /v ".stp" /d "" /f >nul
     reg add "HKCU\Software\Classes\Applications\stpviewer.exe\SupportedTypes" /v ".step" /d "" /f >nul
+    echo Agregando "Preparar miniaturas CAD" al menu de las carpetas...
+    for %%K in ("Directory" "Directory\Background") do (
+        reg add "HKCU\Software\Classes\%%~K\shell\stpviewer.miniaturas" /ve /d "Preparar miniaturas CAD" /f >nul
+        reg add "HKCU\Software\Classes\%%~K\shell\stpviewer.miniaturas" /v Icon /d "\"%EXE%\",0" /f >nul
+    )
+    reg add "HKCU\Software\Classes\Directory\shell\stpviewer.miniaturas\command" /ve /d "\"%EXE%\" --miniaturas \"%%1\"" /f >nul
+    reg add "HKCU\Software\Classes\Directory\Background\shell\stpviewer.miniaturas\command" /ve /d "\"%EXE%\" --miniaturas \"%%V\"" /f >nul
 )
 
 echo Limpiando la cache de miniaturas...

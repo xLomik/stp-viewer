@@ -199,6 +199,32 @@ siempre iconos, nunca miniaturas", y borra la cache
 (`%LOCALAPPDATA%\Microsoft\Windows\Explorer\thumbcache_*.db`), cosa que
 `instalar.bat` ya hace.
 
+## Miniaturas rápidas con muchos archivos
+
+El Explorador genera las miniaturas de a una cuando abre una carpeta y las
+guarda en su caché (`thumbcache_*.db`); la segunda vez salen al instante. Para
+que también la primera vez sea inmediata:
+
+- **Clic derecho en una carpeta (o en el fondo de una carpeta) > Preparar
+  miniaturas CAD.** Una ventana chica genera en segundo plano, con prioridad
+  baja, las miniaturas de los archivos CAD de esa carpeta (sin subcarpetas,
+  hasta 2 000, los más nuevos primero) y las deja en la caché de Windows. Al
+  abrir la carpeta ya están todas.
+- **Automático desde el visor:** al abrir un archivo de un disco local, el visor
+  prepara en segundo plano las miniaturas del resto de esa carpeta. No lo hace
+  en unidades de red, pendrives ni archivos de OneDrive sin descargar.
+
+Cada miniatura cuesta además mucho menos en tamaños grandes (pantallas con
+escala de 125-200 %, panel de detalles): el dibujo interno no pasa de 1024 px
+por lado y usa un solo hilo, porque el Explorador ya pide varias a la vez.
+Medido con `thumbbench` sobre 70 desarrollos de chapa:
+
+| Tamaño | Antes | Ahora |
+|---|---|---|
+| 256 px | 3,7 ms | 3,5 ms |
+| 768 px | 22 ms | 4,7 ms |
+| 1024 px | 47 ms | 7,1 ms |
+
 ## Si el Explorador se cuelga o se reinicia
 
 Hasta la version del 28/09/2026 el panel de vista previa quedaba registrado con
@@ -270,7 +296,7 @@ src/export     escritor de PDF
 src/viewer     SceneView (vista 3D interactiva), herramientas de medir y marcar, y el visor
 src/viewer/ui  tema grafito, iconos vectoriales, cinta, barra de estado, panel, cubo de vistas
 src/ui         logica de interfaz sin Windows (distribucion de la cinta, cubo, recientes)
-src/tools      steprender (CLI), thumbtest y previewtest (prueban la ruta COM)
+src/tools      steprender (CLI), thumbbench (mide la miniatura), thumbtest y previewtest (prueban la ruta COM)
 ```
 
 - **Lector STEP** (`step_file.cpp`): analiza la seccion `DATA` completa,

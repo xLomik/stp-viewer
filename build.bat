@@ -18,7 +18,7 @@ if errorlevel 1 goto :error
 echo [2/3] Visor 3D...
 windres src\viewer\viewer.rc -O coff -o build\viewer.res
 if errorlevel 1 goto :error
-g++ %FLAGS% -municode -o dist\stpviewer.exe src\viewer\main.cpp src\viewer\export.cpp src\viewer\scene_view.cpp src\viewer\image_view.cpp src\viewer\text_overlay.cpp src\viewer\markup_tools.cpp src\viewer\settings.cpp %VIEWER_UI% %ENGINE% build\viewer.res -mwindows %STATIC% -lcomctl32 -lshlwapi -lole32 -loleaut32 -luuid -lgdi32 -luser32 -lshell32 -lcomdlg32 -ladvapi32 -lgdiplus
+g++ %FLAGS% -municode -o dist\stpviewer.exe src\viewer\main.cpp src\viewer\export.cpp src\viewer\scene_view.cpp src\viewer\image_view.cpp src\viewer\text_overlay.cpp src\viewer\markup_tools.cpp src\viewer\settings.cpp src\viewer\thumbnail_warmup_win.cpp %VIEWER_UI% %ENGINE% build\viewer.res -mwindows %STATIC% -lcomctl32 -lshlwapi -lole32 -loleaut32 -luuid -lgdi32 -luser32 -lshell32 -lcomdlg32 -ladvapi32 -lgdiplus
 if errorlevel 1 goto :error
 
 echo [3/3] Herramientas...

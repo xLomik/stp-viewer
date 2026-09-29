@@ -35,6 +35,8 @@ if not errorlevel 1 (
 )
 
 reg delete "HKCU\Software\Classes\Applications\stpviewer.exe" /f >nul 2>&1
+reg delete "HKCU\Software\Classes\Directory\shell\stpviewer.miniaturas" /f >nul 2>&1
+reg delete "HKCU\Software\Classes\Directory\Background\shell\stpviewer.miniaturas" /f >nul 2>&1
 del /f /q "%LOCALAPPDATA%\Microsoft\Windows\Explorer\thumbcache_*.db" >nul 2>&1
 start explorer.exe
 
