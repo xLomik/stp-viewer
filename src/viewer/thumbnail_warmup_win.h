@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -18,8 +19,9 @@ public:
     struct Progress {
         int total = 0;
         int done = 0;    // generadas ahora
-        int cached = 0;  // ya estaban en la cache
+        int cached = 0;  // ya estaban en la cache (o el Explorador las estaba haciendo)
         int failed = 0;
+        bool listed = false;    // ya se leyo la carpeta
         bool finished = false;
         bool available = true;  // false: Windows no ofrece la cache de miniaturas
     };
@@ -27,32 +29,26 @@ public:
     ThumbnailWarmup() = default;
     ThumbnailWarmup(const ThumbnailWarmup&) = delete;
     ThumbnailWarmup& operator=(const ThumbnailWarmup&) = delete;
-    ~ThumbnailWarmup() { cancel(); }
+    ~ThumbnailWarmup() { cancel(true); }
 
-    // Empieza en segundo plano (cancela lo anterior). notify, si no es nulo,
-    // recibe message en cada avance (como mucho cada 100 ms) y al terminar.
-    void start(const std::wstring& folder, int size, HWND notify = nullptr, UINT message = 0);
-    // Pide parar y espera a los hilos.
-    void cancel();
+    // Empieza en segundo plano y vuelve enseguida (la carpeta se lee en otro hilo);
+    // cancela lo anterior sin esperarlo. notify, si no es nulo, recibe message en
+    // cada avance (como mucho cada 100 ms) y al terminar. threads: extracciones a la vez.
+    void start(const std::wstring& folder, int size, int threads, HWND notify = nullptr, UINT message = 0);
+    // Pide parar. wait = true espera a los hilos (hacerlo con la ventana ya oculta:
+    // una miniatura grande puede tardar segundos en soltar).
+    void cancel(bool wait);
     Progress progress() const;
     std::wstring folder() const;
 
 private:
-    void work();
-    void notifyProgress(bool force);
+    struct Job;
+    static void run(std::shared_ptr<Job> job);
+    static void work(std::shared_ptr<Job> job);
 
-    std::vector<std::thread> m_threads;
-    std::vector<std::wstring> m_files;  // rutas completas
-    std::wstring m_folder;
-    int m_size = 256;
-    HWND m_notify = nullptr;
-    UINT m_message = 0;
-    std::atomic<bool> m_stop{false};
-    std::atomic<int> m_next{0};
-    std::atomic<int> m_done{0}, m_cached{0}, m_failed{0}, m_running{0};
-    std::atomic<bool> m_available{true};
-    std::atomic<ULONGLONG> m_lastNotify{0};
-    mutable std::mutex m_mutex;  // m_folder
+    std::shared_ptr<Job> m_job;
+    std::thread m_thread;  // coordinador: lista la carpeta y reparte
+    mutable std::mutex m_mutex;
 };
 
 // Ventana chica de progreso para "stpviewer.exe --miniaturas <carpeta>".

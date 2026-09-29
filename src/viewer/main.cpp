@@ -96,6 +96,7 @@ struct Frame {
     bool panelVisible = true;
     bool panelFloatOpen = false;  // ventana angosta: panel flotante abierto con F2
     stp::ThumbnailWarmup warmup;  // miniaturas de la carpeta del archivo abierto
+    std::wstring pendingWarmup;   // carpeta a preparar cuando termine de cargar el modelo
     bool lastLoading = false;
     bool lastModel = false;
     bool cubeVisible = true;
@@ -423,6 +424,11 @@ void Frame::refreshStatus() {
         lastModel = view.hasModel();
         panel.refresh();
         ribbon.refresh();
+        if (!view.loading() && !pendingWarmup.empty()) {
+            // Automatico: de a una miniatura, para no competir con el Explorador ni el visor.
+            warmup.start(pendingWarmup, 256 * dpi / 96, 1);
+            pendingWarmup.clear();
+        }
     }
     StatusBar::State s;
     stp::MarkupTools* tools = view.tools();
@@ -569,7 +575,7 @@ void Frame::openFile(const std::wstring& given) {
         const std::wstring folder = path.substr(0, slash);
         const std::wstring root = path.substr(0, 3);
         if (GetDriveTypeW(root.c_str()) == DRIVE_FIXED && _wcsicmp(folder.c_str(), warmup.folder().c_str()) != 0) {
-            warmup.start(folder, 256 * dpi / 96);
+            pendingWarmup = folder;  // arranca al terminar la carga: no le quita CPU al modelo
         }
     }
     layout();
@@ -874,7 +880,9 @@ LRESULT CALLBACK frameProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             if (f) {
                 f->saveAll();
-                f->warmup.cancel();  // los hilos de miniaturas terminan antes de cerrar
+                // Oculta antes de esperar: una miniatura grande puede tardar en soltar el hilo.
+                ShowWindow(hwnd, SW_HIDE);
+                f->warmup.cancel(true);
             }
             DestroyWindow(hwnd);
             return 0;

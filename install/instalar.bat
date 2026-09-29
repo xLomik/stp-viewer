@@ -46,20 +46,18 @@ if errorlevel 1 (
     )
 )
 
-if exist "%EXE%" (
-    echo Registrando el visor en "Abrir con"...
-    reg add "HKCU\Software\Classes\Applications\stpviewer.exe\shell\open\command" /ve /d "\"%EXE%\" \"%%1\"" /f >nul
-    reg add "HKCU\Software\Classes\Applications\stpviewer.exe" /v FriendlyAppName /d "stp-viewer" /f >nul
-    reg add "HKCU\Software\Classes\Applications\stpviewer.exe\SupportedTypes" /v ".stp" /d "" /f >nul
-    reg add "HKCU\Software\Classes\Applications\stpviewer.exe\SupportedTypes" /v ".step" /d "" /f >nul
-    echo Agregando "Preparar miniaturas CAD" al menu de las carpetas...
-    for %%K in ("Directory" "Directory\Background") do (
-        reg add "HKCU\Software\Classes\%%~K\shell\stpviewer.miniaturas" /ve /d "Preparar miniaturas CAD" /f >nul
-        reg add "HKCU\Software\Classes\%%~K\shell\stpviewer.miniaturas" /v Icon /d "\"%EXE%\",0" /f >nul
-    )
-    reg add "HKCU\Software\Classes\Directory\shell\stpviewer.miniaturas\command" /ve /d "\"%EXE%\" --miniaturas \"%%1\"" /f >nul
-    reg add "HKCU\Software\Classes\Directory\Background\shell\stpviewer.miniaturas\command" /ve /d "\"%EXE%\" --miniaturas \"%%V\"" /f >nul
-)
+rem Sin bloques entre parentesis: una carpeta como "stp-viewer (1)" los cerraria antes
+rem de tiempo al expandir %EXE%.
+if not exist "%EXE%" goto :sin_visor
+echo Registrando el visor en "Abrir con"...
+reg add "HKCU\Software\Classes\Applications\stpviewer.exe\shell\open\command" /ve /d "\"%EXE%\" \"%%1\"" /f >nul
+reg add "HKCU\Software\Classes\Applications\stpviewer.exe" /v FriendlyAppName /d "stp-viewer" /f >nul
+reg add "HKCU\Software\Classes\Applications\stpviewer.exe\SupportedTypes" /v ".stp" /d "" /f >nul
+reg add "HKCU\Software\Classes\Applications\stpviewer.exe\SupportedTypes" /v ".step" /d "" /f >nul
+echo Agregando "Preparar miniaturas CAD" al menu de las carpetas...
+call :menu_carpeta "Directory" 1
+call :menu_carpeta "Directory\Background" V
+:sin_visor
 
 echo Limpiando la cache de miniaturas...
 taskkill /f /im prevhost.exe >nul 2>&1
@@ -73,3 +71,15 @@ echo  - Miniaturas: abre una carpeta con archivos .stp o .step en iconos grandes
 echo  - Panel de vista previa: menu Ver ^> Panel de vista previa ^(Alt+P^), y
 echo    selecciona un archivo STEP. Se puede girar, acercar y mover ahi mismo.
 pause
+exit /b 0
+
+rem Entrada "Preparar miniaturas CAD" (solo con una carpeta elegida: con varias,
+rem el Explorador abriria una ventana por carpeta).
+:menu_carpeta
+set "CLAVE=HKCU\Software\Classes\%~1\shell\stpviewer.miniaturas"
+reg add "%CLAVE%" /ve /d "Preparar miniaturas CAD" /f >nul
+reg add "%CLAVE%" /v Icon /d "\"%EXE%\",0" /f >nul
+reg add "%CLAVE%" /v MultiSelectModel /d "Single" /f >nul
+rem %%%~2 queda como %1 o %V: el Explorador pone ahi la carpeta.
+reg add "%CLAVE%\command" /ve /d "\"%EXE%\" --miniaturas \"%%%~2\"" /f >nul
+exit /b 0

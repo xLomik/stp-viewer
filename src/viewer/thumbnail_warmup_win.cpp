@@ -25,128 +25,152 @@ std::int64_t fileTime(const FILETIME& t) {
 
 }  // namespace
 
-void ThumbnailWarmup::start(const std::wstring& folder, int size, HWND notify, UINT message) {
-    cancel();
-    std::wstring base = folder;
-    while (base.size() > 3 && (base.back() == L'\\' || base.back() == L'/')) base.pop_back();
-    if (base.empty()) {
-        m_files.clear();
-        m_running = 0;
-        notifyProgress(true);
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_folder = base;
-    }
-    m_size = std::max(16, size);
-    m_notify = notify;
-    m_message = message;
-    m_stop = false;
-    m_next = 0;
-    m_done = m_cached = m_failed = 0;
-    m_available = true;
-    m_files.clear();
+// Estado de una preparacion. Lo comparten el coordinador y los hilos, y sobrevive a
+// cancel(false): los hilos viejos terminan solos sin que nadie los espere.
+struct ThumbnailWarmup::Job {
+    std::wstring folder;
+    int size = 256;
+    int threads = 1;
+    HWND notify = nullptr;
+    UINT message = 0;
+    std::vector<std::wstring> files;  // lo escribe el coordinador antes de lanzar los hilos
+    std::atomic<bool> stop{false};
+    std::atomic<bool> listed{false}, finished{false}, available{true};
+    std::atomic<int> total{0}, next{0}, done{0}, cached{0}, failed{0};
+    std::atomic<ULONGLONG> lastNotify{0};
 
-    // Solo este nivel de la carpeta: sin recorrer subcarpetas.
-    std::vector<ui::WarmupFile> found;
-    WIN32_FIND_DATAW data;
-    const std::wstring pattern = base + (base.empty() || base.back() == L'\\' ? L"*" : L"\\*");
-    HANDLE find = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr,
-                                   FIND_FIRST_EX_LARGE_FETCH);
-    if (find != INVALID_HANDLE_VALUE) {
-        do {
-            ui::WarmupFile file;
-            file.name = data.cFileName;
-            file.size = (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
-            file.modified = fileTime(data.ftLastWriteTime);
-            file.folder = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            // Archivos de OneDrive sin descargar: pedir la miniatura los bajaria.
-            if (data.dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)) continue;
-            found.push_back(file);
-        } while (FindNextFileW(find, &data));
-        FindClose(find);
+    void notifyProgress(bool force) {
+        if (!notify || stop) return;
+        const ULONGLONG now = GetTickCount64();
+        if (!force && now - lastNotify < 100) return;
+        lastNotify = now;
+        PostMessageW(notify, message, 0, 0);
     }
-    const std::wstring prefix = base + (base.back() == L'\\' ? L"" : L"\\");
-    for (const std::wstring& name : ui::warmupOrder(found)) m_files.push_back(prefix + name);
+};
 
-    const unsigned cores = std::thread::hardware_concurrency();
-    const int threads = m_files.empty() ? 0 : std::max(1, std::min(4, static_cast<int>(cores) - 1));
-    m_running = threads;
-    if (threads == 0) {
-        notifyProgress(true);
-        return;
-    }
-    for (int i = 0; i < threads; ++i) m_threads.emplace_back([this]() { work(); });
+void ThumbnailWarmup::start(const std::wstring& folder, int size, int threads, HWND notify, UINT message) {
+    cancel(false);
+    auto job = std::make_shared<Job>();
+    job->folder = folder;
+    while (job->folder.size() > 3 && (job->folder.back() == L'\\' || job->folder.back() == L'/')) job->folder.pop_back();
+    job->size = std::max(16, size);
+    job->threads = std::max(1, threads);
+    job->notify = notify;
+    job->message = message;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_job = job;
+    m_thread = std::thread(&ThumbnailWarmup::run, job);
 }
 
-void ThumbnailWarmup::cancel() {
-    m_stop = true;
-    for (std::thread& thread : m_threads) {
-        if (thread.joinable()) thread.join();
+void ThumbnailWarmup::cancel(bool wait) {
+    std::shared_ptr<Job> job;
+    std::thread thread;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        job = m_job;
+        thread = std::move(m_thread);
     }
-    m_threads.clear();
-    m_running = 0;
+    if (job) job->stop = true;
+    if (!thread.joinable()) return;
+    if (wait) thread.join();
+    else thread.detach();  // el Job es compartido: el hilo termina solo, sin tocar este objeto
 }
 
 ThumbnailWarmup::Progress ThumbnailWarmup::progress() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     Progress p;
-    p.total = static_cast<int>(m_files.size());
-    p.done = m_done;
-    p.cached = m_cached;
-    p.failed = m_failed;
-    p.available = m_available;
-    p.finished = m_running == 0;
+    if (!m_job) {
+        p.listed = p.finished = true;
+        return p;
+    }
+    p.total = m_job->total;
+    p.done = m_job->done;
+    p.cached = m_job->cached;
+    p.failed = m_job->failed;
+    p.listed = m_job->listed;
+    p.finished = m_job->finished;
+    p.available = m_job->available;
     return p;
 }
 
 std::wstring ThumbnailWarmup::folder() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_folder;
+    return m_job ? m_job->folder : std::wstring();
 }
 
-void ThumbnailWarmup::notifyProgress(bool force) {
-    if (!m_notify) return;
-    const ULONGLONG now = GetTickCount64();
-    if (!force && now - m_lastNotify < 100) return;
-    m_lastNotify = now;
-    PostMessageW(m_notify, m_message, 0, 0);
+// Coordinador: lee la carpeta (puede ser lenta, en red) fuera del hilo de la ventana,
+// reparte los archivos entre los hilos y avisa al terminar.
+void ThumbnailWarmup::run(std::shared_ptr<Job> job) {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    const std::wstring& base = job->folder;
+    if (!base.empty()) {
+        // Solo este nivel de la carpeta: sin recorrer subcarpetas.
+        std::vector<ui::WarmupFile> found;
+        WIN32_FIND_DATAW data;
+        const std::wstring prefix = base + (base.back() == L'\\' || base.back() == L'/' ? L"" : L"\\");
+        HANDLE find = FindFirstFileExW((prefix + L"*").c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr,
+                                       FIND_FIRST_EX_LARGE_FETCH);
+        if (find != INVALID_HANDLE_VALUE) {
+            do {
+                // Archivos de OneDrive sin descargar: pedir la miniatura los bajaria.
+                if (data.dwFileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)) continue;
+                ui::WarmupFile file;
+                file.name = data.cFileName;
+                file.size = (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+                file.modified = fileTime(data.ftLastWriteTime);
+                file.folder = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                found.push_back(file);
+            } while (!job->stop && FindNextFileW(find, &data));
+            FindClose(find);
+        }
+        for (const std::wstring& name : ui::warmupOrder(found)) job->files.push_back(prefix + name);
+    }
+    job->total = static_cast<int>(job->files.size());
+    job->listed = true;
+    job->notifyProgress(true);
+
+    std::vector<std::thread> workers;
+    const int count = std::min(job->threads, job->total.load());
+    for (int i = 0; i < count && !job->stop; ++i) workers.emplace_back(&ThumbnailWarmup::work, job);
+    for (std::thread& worker : workers) worker.join();
+    job->finished = true;
+    job->notifyProgress(true);
 }
 
-void ThumbnailWarmup::work() {
-    // Prioridad baja de CPU, disco y memoria: el usuario no tiene que notarlo.
-    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+void ThumbnailWarmup::work(std::shared_ptr<Job> job) {
+    // La miniatura se hace en el proceso aislado de Windows (dllhost.exe); este hilo
+    // solo espera, pero con prioridad baja cede la CPU al visor y al Explorador.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
     const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     IThumbnailCache* cache = nullptr;
     if (FAILED(CoCreateInstance(kCLSID_LocalThumbnailCache, nullptr, CLSCTX_INPROC_SERVER, kIID_IThumbnailCache,
                                 reinterpret_cast<void**>(&cache))) ||
         !cache) {
-        m_available = false;  // Windows sin cache de miniaturas: el Explorador las hara al vuelo
+        job->available = false;  // Windows sin cache de miniaturas: el Explorador las hara al vuelo
     } else {
-        for (;;) {
-            if (m_stop) break;
-            const int index = m_next++;
-            if (index >= static_cast<int>(m_files.size())) break;
+        // El Explorador (u otro visor) ya esta haciendo esa miniatura: no es un fallo.
+        const HRESULT pending = static_cast<HRESULT>(0x8004B200L);  // WTS_E_EXTRACTIONPENDING
+        while (!job->stop) {
+            const int index = job->next++;
+            if (index >= job->total) break;
             IShellItem* item = nullptr;
-            HRESULT hr = SHCreateItemFromParsingName(m_files[static_cast<std::size_t>(index)].c_str(), nullptr,
+            HRESULT hr = SHCreateItemFromParsingName(job->files[static_cast<std::size_t>(index)].c_str(), nullptr,
                                                      kIID_IShellItem, reinterpret_cast<void**>(&item));
             ISharedBitmap* bitmap = nullptr;
             WTS_CACHEFLAGS flags = WTS_DEFAULT;
             if (SUCCEEDED(hr)) {
-                hr = cache->GetThumbnail(item, static_cast<UINT>(m_size), WTS_EXTRACT, &bitmap, &flags, nullptr);
+                hr = cache->GetThumbnail(item, static_cast<UINT>(job->size), WTS_EXTRACT, &bitmap, &flags, nullptr);
             }
             if (bitmap) bitmap->Release();
             if (item) item->Release();
-            if (FAILED(hr)) ++m_failed;
-            else if (flags & WTS_CACHED) ++m_cached;
-            else ++m_done;
-            notifyProgress(false);
+            if (hr == pending || (SUCCEEDED(hr) && (flags & WTS_CACHED))) ++job->cached;
+            else if (SUCCEEDED(hr)) ++job->done;
+            else ++job->failed;
+            job->notifyProgress(false);
         }
         cache->Release();
     }
     if (SUCCEEDED(init)) CoUninitialize();
-    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
-    if (--m_running == 0) notifyProgress(true);
 }
 
 // --- Ventana de progreso -------------------------------------------------------------
@@ -197,6 +221,8 @@ void paintWarmup(HWND hwnd, WarmupWindow& w) {
         std::wstring status;
         if (!p.available) {
             status = L"Windows no ofrece la cach\u00e9 de miniaturas; el Explorador las har\u00e1 al abrir la carpeta.";
+        } else if (!p.listed) {
+            status = L"Leyendo la carpeta\u2026";
         } else if (p.total == 0 && p.finished) {
             status = L"No hay archivos CAD en esta carpeta.";
         } else {
@@ -269,7 +295,9 @@ LRESULT CALLBACK warmupProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (wparam == VK_ESCAPE) DestroyWindow(hwnd);
             return 0;
         case WM_DESTROY:
-            if (w) w->warmup.cancel();  // los hilos terminan antes de salir
+            // Oculta primero: una miniatura grande puede tardar en soltar el hilo.
+            ShowWindow(hwnd, SW_HIDE);
+            if (w) w->warmup.cancel(true);
             PostQuitMessage(0);
             return 0;
         default:
@@ -306,7 +334,9 @@ int runThumbnailWarmupWindow(HINSTANCE instance, const std::wstring& folder) {
                                 &state);
     if (!hwnd) return 1;
     ShowWindow(hwnd, SW_SHOWNORMAL);
-    state.warmup.start(folder, 256 * state.dpi / 96, hwnd, kProgressMessage);
+    // Pedido a mano: varias miniaturas a la vez (el proceso aislado de Windows las hace).
+    const int threads = std::max(1, std::min(4, static_cast<int>(std::thread::hardware_concurrency()) - 1));
+    state.warmup.start(folder, 256 * state.dpi / 96, threads, hwnd, kProgressMessage);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
