@@ -329,11 +329,11 @@ const char* snapKindName(SnapKind kind) {
         case SnapKind::Midpoint: return "Punto medio";
         case SnapKind::Center: return "Centro";
         case SnapKind::Quadrant: return "Cuadrante";
-        case SnapKind::Intersection: return "Intersección";
-        case SnapKind::Extension: return "Extensión";
+        case SnapKind::Intersection: return "Intersecci\u00f3n";
+        case SnapKind::Extension: return "Extensi\u00f3n";
         case SnapKind::Perpendicular: return "Perpendicular";
         case SnapKind::Tangent: return "Tangente";
-        case SnapKind::OnEdge: return "Más cercano";
+        case SnapKind::OnEdge: return "M\u00e1s cercano";
         default: return "";
     }
 }

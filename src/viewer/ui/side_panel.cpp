@@ -36,15 +36,15 @@ const wchar_t* kindName(MarkKind kind) {
     switch (kind) {
         case MarkKind::Distance: return L"Distancia";
         case MarkKind::Radius: return L"Radio";
-        case MarkKind::Angle: return L"Ángulo";
-        case MarkKind::Area: return L"Área";
+        case MarkKind::Angle: return L"\u00c1ngulo";
+        case MarkKind::Area: return L"\u00c1rea";
         case MarkKind::Note: return L"Nota";
         case MarkKind::Highlight: return L"Resaltado";
         case MarkKind::Underline: return L"Subrayado";
         case MarkKind::Pen: return L"Trazo";
-        case MarkKind::Rectangle: return L"Rectángulo";
+        case MarkKind::Rectangle: return L"Rect\u00e1ngulo";
         case MarkKind::Ellipse: return L"Elipse";
-        case MarkKind::Cloud: return L"Nube de revisión";
+        case MarkKind::Cloud: return L"Nube de revisi\u00f3n";
     }
     return L"";
 }
@@ -156,7 +156,7 @@ void SidePanel::rebuild() {
             if (mark.view != view) continue;
             std::wstring text = tools->describe(mark);
             const std::size_t newline = text.find(L'\n');
-            if (newline != std::wstring::npos) text = text.substr(0, newline) + L"…";
+            if (newline != std::wstring::npos) text = text.substr(0, newline) + L"\u2026";
             m_rows.push_back({mark.id, depth, text, static_cast<int>(mark.kind), view, false});
         }
     };
@@ -208,17 +208,17 @@ void SidePanel::rebuild() {
     m_props.push_back({L"Tipo", m_view->plan2d() || m_view->planar().planar ? L"Plano 2D" : L"Modelo 3D"});
     m_props.push_back({L"Unidades", units.empty() ? L"No declaradas" : units});
     if (m_view->planar().planar) {
-        m_props.push_back({L"Tamaño", number(m_view->planar().width) + L" × " + number(m_view->planar().height) +
+        m_props.push_back({L"Tama\u00f1o", number(m_view->planar().width) + L" \u00d7 " + number(m_view->planar().height) +
                                                (units.empty() ? L"" : L" " + units)});
     } else {
         const Vec3 size = mesh.bounds.size();
-        m_props.push_back({L"Tamaño", number(size.x) + L" × " + number(size.y) + L" × " + number(size.z) +
+        m_props.push_back({L"Tama\u00f1o", number(size.x) + L" \u00d7 " + number(size.y) + L" \u00d7 " + number(size.z) +
                                                (units.empty() ? L"" : L" " + units)});
     }
     const LoadStats& stats = m_view->stats();
-    if (stats.solids > 0) m_props.push_back({L"Sólidos", std::to_wstring(stats.solids)});
+    if (stats.solids > 0) m_props.push_back({L"S\u00f3lidos", std::to_wstring(stats.solids)});
     if (stats.faces > 0) m_props.push_back({L"Caras", std::to_wstring(stats.faces)});
-    if (mesh.triangleCount() > 0) m_props.push_back({L"Triángulos", std::to_wstring(mesh.triangleCount())});
+    if (mesh.triangleCount() > 0) m_props.push_back({L"Tri\u00e1ngulos", std::to_wstring(mesh.triangleCount())});
     m_props.push_back({L"Aristas", std::to_wstring(mesh.edgeLines.size() / 2)});
     if (!mesh.texts.empty()) m_props.push_back({L"Textos", std::to_wstring(mesh.texts.size())});
     m_props.push_back({L"Marcas", std::to_wstring(doc.marks.size())});
@@ -285,7 +285,7 @@ void SidePanel::paint() {
             format.SetAlignment(Gdiplus::StringAlignmentCenter);
             Gdiplus::SolidBrush ink(color(kTextDim));
             const std::wstring empty = m_view && m_view->hasModel()
-                                           ? L"Sin marcas todavía.\nUsa las pestañas Medir o Marcar."
+                                           ? L"Sin marcas todav\u00eda.\nUsa las pesta\u00f1as Medir o Marcar."
                                            : L"Abre un archivo para ver sus marcas.";
             g.DrawString(empty.c_str(), -1, f.get(),
                          Gdiplus::RectF(static_cast<float>(list.left) + pad, static_cast<float>(list.top) + scaled(16),

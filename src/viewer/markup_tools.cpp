@@ -140,19 +140,19 @@ std::wstring MarkupTools::statusText() const {
     switch (m_tool) {
         case Tool::Distance:
             return (m_pending.empty() ? L"Distancia: clic en el primer punto" : L"Distancia: clic en el segundo punto") + tail;
-        case Tool::Radius: return L"Radio: clic sobre un círculo, un arco o un agujero" + tail;
+        case Tool::Radius: return L"Radio: clic sobre un c\u00edrculo, un arco o un agujero" + tail;
         case Tool::Angle:
-            return (m_pending.empty() ? L"Ángulo: clic en tres puntos (vértice al medio) o en dos líneas"
-                                      : L"Ángulo: siguiente punto o segunda línea") + tail;
-        case Tool::Area: return L"Área: clic dentro de un contorno cerrado o sobre una cara   (Esc: terminar)";
+            return (m_pending.empty() ? L"\u00c1ngulo: clic en tres puntos (v\u00e9rtice al medio) o en dos l\u00edneas"
+                                      : L"\u00c1ngulo: siguiente punto o segunda l\u00ednea") + tail;
+        case Tool::Area: return L"\u00c1rea: clic dentro de un contorno cerrado o sobre una cara   (Esc: terminar)";
         case Tool::Highlight: return L"Resaltador: arrastrar   (Q: color, Esc: terminar)";
         case Tool::Underline: return L"Subrayado: arrastrar   (Shift u Orto: recto, Q: color, Esc: terminar)";
-        case Tool::Pen: return L"Lápiz: arrastrar   (Q: color, Esc: terminar)";
-        case Tool::Rectangle: return L"Rectángulo: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
+        case Tool::Pen: return L"L\u00e1piz: arrastrar   (Q: color, Esc: terminar)";
+        case Tool::Rectangle: return L"Rect\u00e1ngulo: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
         case Tool::Ellipse: return L"Elipse: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
-        case Tool::Cloud: return L"Nube de revisión: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
+        case Tool::Cloud: return L"Nube de revisi\u00f3n: arrastrar de esquina a esquina   (Q: color, Esc: terminar)";
         case Tool::Note:
-            return (m_noteAnchored ? L"Nota: clic donde va el texto" : L"Nota: clic en el punto a señalar") +
+            return (m_noteAnchored ? L"Nota: clic donde va el texto" : L"Nota: clic en el punto a se\u00f1alar") +
                    std::wstring(L"   (Esc: terminar)");
         default: return std::wstring();
     }

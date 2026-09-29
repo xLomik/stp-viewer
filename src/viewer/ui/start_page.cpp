@@ -62,7 +62,7 @@ void StartPage::paint() {
         const auto title = font(20, m_dpi, Gdiplus::FontStyleBold);
         const auto subtitle = font(10, m_dpi);
         drawText(g, L"Visor STP", *title, Gdiplus::RectF(left + logo + scaled(18), y + scaled(2), column, static_cast<float>(scaled(38))), kText);
-        drawText(g, L"STEP  ·  IGES  ·  DXF  ·  STL  ·  OBJ  ·  PLY", *subtitle,
+        drawText(g, L"STEP  \u00b7  IGES  \u00b7  DXF  \u00b7  STL  \u00b7  OBJ  \u00b7  PLY", *subtitle,
                  Gdiplus::RectF(left + logo + scaled(18), y + scaled(38), column, static_cast<float>(scaled(22))), kTextDim);
         y += logo + scaled(34);
 
@@ -85,7 +85,7 @@ void StartPage::paint() {
         Gdiplus::Pen line(color(kBorder), 1.0f);
         g.DrawLine(&line, left, y - scaled(4), left + column, y - scaled(4));
         if (m_recent.empty()) {
-            drawText(g, L"Todavía no hay archivos recientes.", *small,
+            drawText(g, L"Todav\u00eda no hay archivos recientes.", *small,
                      Gdiplus::RectF(left, y, column, static_cast<float>(scaled(36))), kTextDim);
             y += scaled(44);
         }
