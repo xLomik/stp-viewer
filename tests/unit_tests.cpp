@@ -22,6 +22,7 @@
 #include "../src/render/renderer.h"
 #include "../src/ui/recent_files.h"
 #include "../src/ui/ribbon_layout.h"
+#include "../src/ui/thumbnail_warmup.h"
 #include "../src/ui/view_cube_math.h"
 
 namespace {
@@ -1908,6 +1909,30 @@ TEST(thumbnail_supersample_caps_raster) {
     CHECK(stp::thumbnailSupersample(1024) == 1);
     CHECK(stp::thumbnailSupersample(2560) == 1);
     for (int size = 16; size <= 1024; size += 8) CHECK(size * stp::thumbnailSupersample(size) <= std::max(1024, size));
+}
+
+TEST(thumbnail_warmup_candidates) {
+    CHECK(stp::ui::isCadFile(L"pieza.DXF"));
+    CHECK(stp::ui::isCadFile(L"Ensamble.StP"));
+    CHECK(stp::ui::isCadFile(L"a.b.sldprt"));
+    CHECK(!stp::ui::isCadFile(L"notas.txt"));
+    CHECK(!stp::ui::isCadFile(L"dxf"));
+    CHECK(!stp::ui::isCadFile(L"raro."));
+    CHECK(!stp::ui::isCadFile(L".dxf.bak"));
+    const auto order = stp::ui::warmupOrder({{L"viejo.dxf", 10, 100}, {L"nuevo.stp", 10, 300}, {L"medio.igs", 10, 200},
+                                             {L"foto.jpg", 10, 400}, {L"vacio.dxf", 0, 500}});
+    CHECK((order == std::vector<std::wstring>{L"nuevo.stp", L"medio.igs", L"viejo.dxf"}));
+}
+
+TEST(thumbnail_warmup_limits_and_skips_folders) {
+    std::vector<stp::ui::WarmupFile> files;
+    for (int i = 0; i < 2500; ++i) files.push_back({L"p" + std::to_wstring(i) + L".dxf", 1, i});
+    files.push_back({L"carpeta.dxf", 1, 99999, true});
+    const auto order = stp::ui::warmupOrder(files);
+    CHECK(order.size() == 2000);
+    CHECK(order.front() == L"p2499.dxf");
+    CHECK(std::find(order.begin(), order.end(), L"carpeta.dxf") == order.end());
+    CHECK(stp::ui::warmupOrder(files, 3).size() == 3);
 }
 
 int main() {

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "shellext.h"
+#include "../ui/thumbnail_warmup.h"
 
 HMODULE g_shellExtModule = nullptr;
 
@@ -34,12 +35,6 @@ const wchar_t* kThumbnailClsid = L"{90D4532D-A5D0-49A7-B115-800AD0042693}";
 const wchar_t* kPreviewClsid = L"{B718893F-E5EC-4CD8-BF74-D02BC81308C3}";
 const wchar_t* kThumbnailName = L"stp-viewer STEP thumbnail provider";
 const wchar_t* kPreviewName = L"stp-viewer STEP preview handler";
-// Formatos con geometria propia y, al final, los cerrados de los que solo se
-// puede sacar la imagen de vista previa que guardo el CAD.
-const wchar_t* kExtensions[] = {L".stp",     L".step",   L".stpz",  L".igs",  L".iges",
-                                L".dxf",     L".stl",    L".obj",   L".ply",  L".dwg",
-                                L".prt",     L".sldprt", L".sldasm", L".ipt", L".iam",
-                                L".catpart", L".catproduct"};
 const wchar_t* kPreviewHandlersKey =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers";
 
@@ -213,7 +208,8 @@ HRESULT RegisterShellExtensions(HMODULE module, bool perUser) {
         }
     }
 
-    for (const wchar_t* ext : kExtensions) {
+    for (const std::wstring& extension : stp::ui::cadExtensions()) {
+        const wchar_t* ext = extension.c_str();
         // Las dos grafias importan: la clave de la extension y la que consulta
         // el Explorador cuando la extension ya tiene ProgID de algun CAD.
         setValue(root, base + ext + L"\\ShellEx\\" + kThumbnailProviderIid, nullptr,
@@ -261,7 +257,8 @@ HRESULT UnregisterShellExtensions(bool perUser) {
     RegDeleteTreeW(root, (base + L"CLSID\\" + kThumbnailClsid).c_str());
     RegDeleteTreeW(root, (base + L"CLSID\\" + kPreviewClsid).c_str());
 
-    for (const wchar_t* ext : kExtensions) {
+    for (const std::wstring& extension : stp::ui::cadExtensions()) {
+        const wchar_t* ext = extension.c_str();
         if (hasValue(root, base + ext, kPerceivedMarker)) {
             deleteValue(root, base + ext, L"PerceivedType");
             deleteValue(root, base + ext, kPerceivedMarker);
